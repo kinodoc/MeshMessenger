@@ -19,6 +19,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import com.example.meshmessenger.mesh.*
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.MultiFormatWriter
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import com.google.zxing.common.BitMatrix
 import java.nio.charset.StandardCharsets
 import java.util.Base64
@@ -36,6 +38,14 @@ class MainActivity : ComponentActivity() {
     private lateinit var netBirdStatus: TextView
     private var node: MeshGattNode? = null
     private var selected: ContactStore.Contact? = null
+    private var pendingQrField: EditText? = null
+
+    private val qrScanner = registerForActivityResult(ScanContract()) { result ->
+        val raw = result.contents?.trim()
+        if (raw.isNullOrEmpty()) return@registerForActivityResult
+        pendingQrField?.setText(raw)
+        log.text = "QR-код считан. Проверь данные и нажми «Добавить»."
+    }
 
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { startMeshIfAllowed() }
 
@@ -148,10 +158,40 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun addContactDialog() {
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 4, 24, 4) }
-        val name = EditText(this).apply { hint = "Имя контакта" }
-        val card = EditText(this).apply { hint = "Вставь данные QR-карточки"; minLines = 4 }
-        box.addView(name); box.addView(card)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 4, 24, 4)
+        }
+
+        val name = EditText(this).apply {
+            hint = "Имя контакта"
+        }
+
+        val card = EditText(this).apply {
+            hint = "Вставь данные QR-карточки"
+            minLines = 4
+        }
+
+        pendingQrField = card
+
+        val scan = Button(this).apply {
+            text = "▣ СКАНИРОВАТЬ QR КАМЕРОЙ"
+            setOnClickListener {
+                qrScanner.launch(
+                    ScanOptions().apply {
+                        setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                        setPrompt("Наведите камеру на QR-код контакта")
+                        setBeepEnabled(true)
+                        setOrientationLocked(false)
+                    }
+                )
+            }
+        }
+
+        box.addView(name)
+        box.addView(card)
+        box.addView(scan)
+
         AlertDialogBuilder(box, "Добавить контакт") { }
     }
 
