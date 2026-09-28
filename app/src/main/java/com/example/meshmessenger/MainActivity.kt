@@ -141,7 +141,7 @@ class MainActivity : ComponentActivity() {
         startService(Intent(this, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_START))
         node = MeshGattNode(this, adapter, identity.nodeId, router, queue,
             { status.text = it },
-            { packetText -> handleIncoming(packetText) }
+            { packetText, sourceId -> handleIncoming(packetText, sourceId) }
         ).also { it.start() }
         val scanner = adapter.bluetoothLeScanner
         val settings = android.bluetooth.le.ScanSettings.Builder().setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY).build()
@@ -152,9 +152,14 @@ class MainActivity : ComponentActivity() {
         })
     }
 
-    private fun handleIncoming(text: String) {
-        // Transport MVP currently exposes decrypted text. Peer identification will be carried by the chat envelope in the next protocol revision.
-        log.text = "Получено: $text"
+    private fun handleIncoming(text: String, sourceId: String) {
+        chats.add(sourceId, text, false)
+        val contact = contacts.all().firstOrNull { it.nodeId == sourceId }
+        log.text = if (contact != null) {
+            "Получено от ${contact.name}: $text"
+        } else {
+            "Получено от ${sourceId.take(12)}: $text"
+        }
     }
 
     private fun addContactDialog() {

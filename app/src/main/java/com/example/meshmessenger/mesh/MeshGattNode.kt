@@ -17,7 +17,7 @@ class MeshGattNode(
     private val router: MeshRouter,
     private val queue: PendingMessageStore,
     private val onStatus: (String) -> Unit,
-    private val onMessage: (String) -> Unit
+    private val onMessage: (String, String) -> Unit
 ) {
     private val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private var server: BluetoothGattServer? = null
@@ -109,7 +109,7 @@ class MeshGattNode(
         val packet = MeshPacket.decode(bytes) ?: return
         val next = router.onReceive(packet)
         if (packet.destinationId == localId) {
-            onMessage(router.decryptForLocal(packet) ?: "[не удалось расшифровать]")
+            onMessage(router.decryptForLocal(packet) ?: "[не удалось расшифровать]", packet.sourceId)
             queue.remove(packet.messageId)
         } else if (next != null) {
             queue.enqueue(next)
