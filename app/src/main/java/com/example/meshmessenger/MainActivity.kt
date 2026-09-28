@@ -52,7 +52,7 @@ class MainActivity : ComponentActivity() {
         buildHome()
         updateNetBirdStatus()
     }
-        } catch (t: Throwable) {
+    } catch (t: Throwable) {
             android.util.Log.e("MeshMessenger", "Startup failure", t)
             android.app.AlertDialog.Builder(this)
                 .setTitle("Ошибка запуска")
