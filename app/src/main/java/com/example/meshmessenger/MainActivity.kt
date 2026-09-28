@@ -354,7 +354,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showOwnQr() {
-        val card = "${identity.nodeId}|Я|${identity.publicKeyBase64}"
+        val card = "${identity.nodeId}|Я|${identity.publicKeyBase64}|${netBird.localNetBirdIp() ?: ""}"
         val image = makeQr(card, 720)
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 12, 24, 12) }
         box.addView(ImageView(this).apply { setImageBitmap(image); adjustViewBounds = true })
