@@ -187,7 +187,7 @@ class MainActivity : ComponentActivity() {
                         setDesiredBarcodeFormats(ScanOptions.QR_CODE)
                         setPrompt("Наведите камеру на QR-код контакта")
                         setBeepEnabled(true)
-                        setOrientationLocked(false)
+                        setOrientationLocked(true)
                     }
                 )
             }
@@ -206,11 +206,17 @@ class MainActivity : ComponentActivity() {
                 val fields = view.children().toList().filterIsInstance<EditText>()
                 val name = fields[0].text.toString().ifBlank { "Контакт" }
                 val raw = fields[1].text.toString().trim()
-                val parts = raw.split("|", limit = 3)
-                if (parts.size == 3 && runCatching { CryptoManager.publicKeyFromBase64(parts[2]) }.isSuccess) {
-                    contacts.upsert(ContactStore.Contact(parts[0], name, parts[2]))
-                    log.text = "Контакт добавлен: $name"
-                } else log.text = "Неверная QR-карточка. Используй строку NodeID|имя|publicKey"
+                val parts = raw.split("|", limit = 4)
+                val publicKey = parts.getOrNull(2).orEmpty()
+                val netBirdIp = parts.getOrNull(3)?.trim().orEmpty()
+                val validIp = netBirdIp.isEmpty() || runCatching {
+                    val address = java.net.InetAddress.getByName(netBirdIp)
+                    address is java.net.Inet4Address && netBird.isNetBirdAddress(address)
+                }.getOrDefault(false)
+                if (parts.size >= 3 && parts[0].isNotBlank() && publicKey.isNotBlank() && validIp && runCatching { CryptoManager.publicKeyFromBase64(publicKey) }.isSuccess) {
+                    contacts.upsert(ContactStore.Contact(parts[0], name, publicKey, netBirdIp))
+                    log.text = if (netBirdIp.isNotEmpty()) "Контакт добавлен: $name • внутренняя сеть: $netBirdIp" else "Контакт добавлен: $name"
+                } else log.text = "Неверная QR-карточка. Используй строку NodeID|имя|publicKey|NetBirdIP"
             }.setNegativeButton("Отмена", null).show()
     }
 
