@@ -325,18 +325,47 @@ class MainActivity : ComponentActivity() {
 
         fun refresh() {
             val messages = chats.messages(contact.nodeId)
-            history.text = messages.joinToString(System.lineSeparator() + System.lineSeparator()) { message ->
+            val builder = android.text.SpannableStringBuilder()
+            val prefix = "                         "
+
+            messages.forEachIndexed { index, message ->
                 val delivery = when (message.delivery) {
                     ChatStore.Delivery.SENT -> "✓ Отправлено"
                     ChatStore.Delivery.WAITING -> "◷ Ожидает отправки"
                     ChatStore.Delivery.NOT_SENT -> "⚠ Не отправлено"
                 }
+
                 if (message.mine) {
-                    "                         YOU" + System.lineSeparator() + "                         ${message.text}" + System.lineSeparator() + "                         $delivery"
+                    builder.append(prefix)
+                    builder.append(message.text)
+                    builder.append(System.lineSeparator())
+
+                    val statusStart = builder.length
+                    builder.append(prefix)
+                    builder.append(delivery)
+
+                    if (message.delivery == ChatStore.Delivery.SENT) {
+                        val checkStart = statusStart + prefix.length
+                        builder.setSpan(
+                            android.text.style.ForegroundColorSpan(0xFFFF9800.toInt()),
+                            checkStart,
+                            checkStart + 1,
+                            android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                        )
+                    }
                 } else {
-                    "${contact.name.uppercase()}" + System.lineSeparator() + "${message.text}"
+                    builder.append(contact.name.uppercase())
+                    builder.append(System.lineSeparator())
+                    builder.append(message.text)
+                }
+
+                if (index < messages.lastIndex) {
+                    builder.append(System.lineSeparator())
+                    builder.append(System.lineSeparator())
                 }
             }
+
+            history.text = builder
             scroll.post { scroll.fullScroll(android.view.View.FOCUS_DOWN) }
         }
 
