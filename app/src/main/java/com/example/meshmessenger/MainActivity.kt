@@ -284,16 +284,6 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        val scroll = ScrollView(this).apply {
-            setBackgroundColor(0xFF05080D.toInt())
-            addView(history)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-        }
-
         val inputRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = android.view.Gravity.CENTER_VERTICAL
@@ -332,48 +322,28 @@ class MainActivity : ComponentActivity() {
         inputRow.addView(send)
 
         fun refresh() {
-            val messages = chats.messages(contact.nodeId)
-            val builder = android.text.SpannableStringBuilder()
-            val prefix = "                         "
+            history.removeAllViews()
 
-            messages.forEachIndexed { index, message ->
-                val delivery = when (message.delivery) {
-                    ChatStore.Delivery.SENT -> "✓ Отправлено"
-                    ChatStore.Delivery.WAITING -> "◷ Ожидает отправки"
-                    ChatStore.Delivery.NOT_SENT -> "⚠ Не отправлено"
+            chats.messages(contact.nodeId).forEach { message ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = if (message.mine) android.view.Gravity.END else android.view.Gravity.START
                 }
-
-                if (message.mine) {
-                    builder.append(prefix)
-                    builder.append(message.text)
-                    builder.append(System.lineSeparator())
-
-                    val statusStart = builder.length
-                    builder.append(prefix)
-                    builder.append(delivery)
-
-                    if (message.delivery == ChatStore.Delivery.SENT) {
-                        val checkStart = statusStart + prefix.length
-                        builder.setSpan(
-                            android.text.style.ForegroundColorSpan(0xFFFF9800.toInt()),
-                            checkStart,
-                            checkStart + 1,
-                            android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                        )
+                val bubble = TextView(this).apply {
+                    text = message.text + if (message.mine) "  ✓" else ""
+                    textSize = 16f
+                    setTextColor(0xFFE7F7FF.toInt())
+                    setPadding(18, 12, 18, 12)
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = 18f
+                        setColor(if (message.mine) 0xFF082B38.toInt() else 0xFF122333.toInt())
+                        setStroke(1, if (message.mine) 0xFF00D9FF.toInt() else 0xFF234B66.toInt())
                     }
-                } else {
-                    builder.append(contact.name.uppercase())
-                    builder.append(System.lineSeparator())
-                    builder.append(message.text)
                 }
-
-                if (index < messages.lastIndex) {
-                    builder.append(System.lineSeparator())
-                    builder.append(System.lineSeparator())
-                }
+                row.addView(bubble)
+                history.addView(row)
             }
 
-            history.text = builder
             scroll.post { scroll.fullScroll(android.view.View.FOCUS_DOWN) }
         }
 
