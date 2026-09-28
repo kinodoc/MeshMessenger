@@ -10,13 +10,14 @@ import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import com.example.meshmessenger.MainActivity
 
 /** Keeps the mesh transports alive while the UI is not visible. */
 class MeshForegroundService : Service() {
-
     companion object {
         private const val CHANNEL_ID = "mesh_runtime"
         private const val NOTIFICATION_ID = 1001
@@ -31,18 +32,40 @@ class MeshForegroundService : Service() {
         const val ACTION_IP_MESSAGE = "com.example.meshmessenger.IP_MESSAGE"
         const val EXTRA_TEXT = "text"
         const val EXTRA_SOURCE_ID = "source_id"
+
+        const val ACTION_IP_STATUS = "com.example.meshmessenger.IP_STATUS"
+        const val EXTRA_PACKET_ID = "packet_id"
+        const val EXTRA_IP_SUCCESS = "ip_success"
+
+        private const val RETRY_INTERVAL_MS = 5_000L
     }
 
     private var node: MeshGattNode? = null
     private var ipTransport: MeshIpTransport? = null
+    private var netBirdGuard: NetBirdGuard? = null
+    private lateinit var pendingIp: PendingIpMessageStore
+
+    private val retryHandler = Handler(Looper.getMainLooper())
+
+    private val retryRunnable = object : Runnable {
+        override fun run() {
+            retryPendingIp()
+            retryHandler.postDelayed(this, RETRY_INTERVAL_MS)
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
+
         createChannel()
+
         startForeground(
             NOTIFICATION_ID,
             notification("Mesh работает в фоне")
         )
+
+        pendingIp = PendingIpMessageStore(this)
+        retryHandler.post(retryRunnable)
     }
 
     override fun onStartCommand(
@@ -50,7 +73,6 @@ class MeshForegroundService : Service() {
         flags: Int,
         startId: Int
     ): Int {
-
         when (intent?.action) {
 
             ACTION_STOP -> {
@@ -69,7 +91,16 @@ class MeshForegroundService : Service() {
                     val packet = MeshPacket.decode(bytes)
 
                     if (packet != null) {
-                        ipTransport?.send(packet, ip)
+                        val success = ipTransport?.send(packet, ip) == true
+
+                        if (success) {
+                            pendingIp.remove(packet.messageId)
+                        }
+
+                        sendIpStatus(
+                            packet.messageId.toString(),
+                            success
+                        )
                     } else {
                         updateNotification("IP: неверный пакет")
                     }
@@ -98,11 +129,13 @@ class MeshForegroundService : Service() {
 
         val queue = PendingMessageStore(this)
 
+        netBirdGuard = NetBirdGuard(this)
+
         ipTransport = MeshIpTransport(
             localId = identity.nodeId,
             router = router,
             queue = queue,
-            guard = NetBirdGuard(this),
+            guard = netBirdGuard!!,
             onStatus = { updateNotification(it) },
             onMessage = { text, sourceId ->
                 handleIpMessage(text, sourceId)
@@ -132,7 +165,49 @@ class MeshForegroundService : Service() {
             }
         }
 
-        updateNotification("BLE + NetBird IP работают")
+        updateNotification("BLE + внутренняя сеть работают")
+    }
+
+    private fun retryPendingIp() {
+        val transport = ipTransport ?: return
+        val guard = netBirdGuard ?: return
+
+        if (guard.status() != NetBirdGuard.Status.CONNECTED) {
+            return
+        }
+
+        val entries = pendingIp.snapshot()
+        if (entries.isEmpty()) {
+            return
+        }
+
+        for (entry in entries) {
+            val packet = MeshPacket.decode(entry.bytes) ?: run {
+                pendingIp.remove(entry.id)
+                sendIpStatus(entry.id.toString(), false)
+                continue
+            }
+
+            val success = transport.send(packet, entry.ip)
+
+            if (success) {
+                pendingIp.remove(entry.id)
+                sendIpStatus(entry.id.toString(), true)
+            }
+        }
+    }
+
+    private fun sendIpStatus(
+        packetId: String,
+        success: Boolean
+    ) {
+        val statusIntent = Intent(ACTION_IP_STATUS).apply {
+            setPackage(packageName)
+            putExtra(EXTRA_PACKET_ID, packetId)
+            putExtra(EXTRA_IP_SUCCESS, success)
+        }
+
+        sendBroadcast(statusIntent)
     }
 
     private fun handleIpMessage(
@@ -149,11 +224,15 @@ class MeshForegroundService : Service() {
     }
 
     private fun stopMesh() {
+        retryHandler.removeCallbacks(retryRunnable)
+
         node?.stop()
         node = null
 
         ipTransport?.stop()
         ipTransport = null
+
+        netBirdGuard = null
     }
 
     private fun createChannel() {

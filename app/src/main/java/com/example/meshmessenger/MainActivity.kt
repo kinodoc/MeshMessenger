@@ -34,6 +34,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var queue: PendingMessageStore
     private lateinit var contacts: ContactStore
     private lateinit var chats: ChatStore
+    private lateinit var pendingIp: PendingIpMessageStore
     private lateinit var netBird: NetBirdGuard
     private lateinit var netBirdStatus: TextView
     private var node: MeshGattNode? = null
@@ -58,6 +59,7 @@ class MainActivity : ComponentActivity() {
         queue = PendingMessageStore(this)
         contacts = ContactStore(this)
         chats = ChatStore(this)
+        pendingIp = PendingIpMessageStore(this)
         netBird = NetBirdGuard(this)
         buildHome()
         updateNetBirdStatus()
@@ -209,13 +211,13 @@ class MainActivity : ComponentActivity() {
                 val parts = raw.split("|", limit = 4)
                 val publicKey = parts.getOrNull(2).orEmpty()
                 val netBirdIp = parts.getOrNull(3)?.trim().orEmpty()
-                val validIp = netBirdIp.isEmpty() || runCatching {
+                val validIp = netBirdIp.isNotBlank() && runCatching {
                     val address = java.net.InetAddress.getByName(netBirdIp)
                     address is java.net.Inet4Address && netBird.isNetBirdAddress(address)
                 }.getOrDefault(false)
-                if (parts.size >= 3 && parts[0].isNotBlank() && publicKey.isNotBlank() && validIp && runCatching { CryptoManager.publicKeyFromBase64(publicKey) }.isSuccess) {
+                if (parts.size == 4 && parts[0].isNotBlank() && publicKey.isNotBlank() && validIp && runCatching { CryptoManager.publicKeyFromBase64(publicKey) }.isSuccess) {
                     contacts.upsert(ContactStore.Contact(parts[0], name, publicKey, netBirdIp))
-                    log.text = if (netBirdIp.isNotEmpty()) "Контакт добавлен: $name • внутренняя сеть: $netBirdIp" else "Контакт добавлен: $name"
+                    log.text = "Контакт добавлен: $name • внутренняя сеть: $netBirdIp"
                 } else log.text = "Неверная QR-карточка. Используй строку NodeID|имя|publicKey|NetBirdIP"
             }.setNegativeButton("Отмена", null).show()
     }
@@ -323,12 +325,18 @@ class MainActivity : ComponentActivity() {
 
         fun refresh() {
             val messages = chats.messages(contact.nodeId)
-            history.text = messages.joinToString("\n\n") { message ->
-                if (message.mine) {
-                    "                         YOU\n                         ${message.text}"
-                } else {
-                    "${contact.name.uppercase()}\n${message.text}"
+            history.text = messages.joinToString(System.lineSeparator() + System.lineSeparator()) { message ->
+                val delivery = when (message.delivery) {
+                    ChatStore.Delivery.SENT -> "✓ Отправлено"
+                    ChatStore.Delivery.WAITING -> "◷ Ожидает отправки"
+                    ChatStore.Delivery.NOT_SENT -> "⚠ Не отправлено"
                 }
+                if (message.mine) {
+                    "                         YOU" + System.lineSeparator() + "                         ${message.text}" + System.lineSeparator() + "                         $delivery"
+                } else {
+                    "${contact.name.uppercase()}" + System.lineSeparator() + "${message.text}"
+                }
+            }
             }
             scroll.post { scroll.fullScroll(android.view.View.FOCUS_DOWN) }
         }
@@ -339,12 +347,37 @@ class MainActivity : ComponentActivity() {
 
             val public = CryptoManager.publicKeyFromBase64(contact.publicKeyBase64)
             val packet = router.createEncryptedMessage(contact.nodeId, public, text)
-            node?.send(packet) ?: queue.enqueue(packet)
-            chats.add(contact.nodeId, text, true)
+
+            if (netBird.onlyNetBird) {
+                val ip = contact.netBirdIp.trim()
+                val connected = netBird.status() == NetBirdGuard.Status.CONNECTED
+
+                if (ip.isBlank()) {
+                    chats.add(contact.nodeId, text, true, ChatStore.Delivery.NOT_SENT, packet.messageId.toString())
+                    log.text = "⚠ Не отправлено: у контакта нет внутреннего IP"
+                } else {
+                    pendingIp.enqueue(packet, ip)
+                    chats.add(contact.nodeId, text, true, if (connected) ChatStore.Delivery.WAITING else ChatStore.Delivery.NOT_SENT, packet.messageId.toString())
+
+                    if (connected) {
+                        startService(Intent(this, MeshForegroundService::class.java).apply {
+                            action = MeshForegroundService.ACTION_SEND_IP
+                            putExtra(MeshForegroundService.EXTRA_IP, ip)
+                            putExtra(MeshForegroundService.EXTRA_PACKET, packet.encode())
+                        })
+                        log.text = "◷ Ожидает отправки через внутреннюю сеть"
+                    } else {
+                        log.text = "⚠ Не отправлено: внутренняя сеть не подключена"
+                    }
+                }
+            } else {
+                node?.send(packet) ?: queue.enqueue(packet)
+                chats.add(contact.nodeId, text, true, ChatStore.Delivery.SENT, packet.messageId.toString())
+                log.text = "✓ Отправлено через mesh"
+            }
 
             input.text.clear()
             refresh()
-            log.text = "Сообщение сохранено и отправлено в mesh"
         }
 
         root.addView(header)
@@ -359,15 +392,72 @@ class MainActivity : ComponentActivity() {
         refresh()
     }
 
+    private val ipStatusReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != MeshForegroundService.ACTION_IP_STATUS) return
+
+            val packetId = intent.getStringExtra(MeshForegroundService.EXTRA_PACKET_ID) ?: return
+            val success = intent.getBooleanExtra(MeshForegroundService.EXTRA_IP_SUCCESS, false)
+
+            chats.updateDelivery(
+                packetId,
+                if (success) ChatStore.Delivery.SENT else ChatStore.Delivery.NOT_SENT
+            )
+
+            log.text = if (success) {
+                "✓ Отправлено через внутреннюю сеть"
+            } else {
+                "⚠ Не отправлено: внутренняя сеть недоступна"
+            }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        androidx.core.content.ContextCompat.registerReceiver(
+            this,
+            ipStatusReceiver,
+            android.content.IntentFilter(MeshForegroundService.ACTION_IP_STATUS),
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+    }
+
+    override fun onStop() {
+        runCatching { unregisterReceiver(ipStatusReceiver) }
+        super.onStop()
+    }
+
+
     private fun showOwnQr() {
-        val card = "${identity.nodeId}|Я|${identity.publicKeyBase64}|${netBird.localNetBirdIp() ?: ""}"
+        val ip = netBird.localNetBirdIp()
+        if (ip.isNullOrBlank()) {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("Внутренняя сеть")
+                .setMessage("Нельзя создать контактную карточку: устройство не подключено к внутренней сети.")
+                .setPositiveButton("ОК", null)
+                .show()
+            return
+        }
+
+        val card = "${identity.nodeId}|Я|${identity.publicKeyBase64}|$ip"
         val image = makeQr(card, 720)
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 12, 24, 12) }
-        box.addView(ImageView(this).apply { setImageBitmap(image); adjustViewBounds = true })
-        box.addView(TextView(this).apply { text = "Можно также скопировать строку и передать её другому устройству:\n$card" })
-        android.app.AlertDialog.Builder(this).setTitle("Моя контактная карточка").setView(box)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 12, 24, 12)
+        }
+        box.addView(ImageView(this).apply {
+            setImageBitmap(image)
+            adjustViewBounds = true
+        })
+        box.addView(TextView(this).apply {
+            text = "Можно также скопировать строку и передать её другому устройству:" + System.lineSeparator() + card
+        })
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Моя контактная карточка")
+            .setView(box)
             .setPositiveButton("Поделиться") { _, _ -> share(card) }
-            .setNegativeButton("Закрыть", null).show()
+            .setNegativeButton("Закрыть", null)
+            .show()
     }
 
     private fun share(text: String) {
