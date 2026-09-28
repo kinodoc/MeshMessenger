@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        try {
         adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
         identity = IdentityStore(this)
         router = MeshRouter(identity.nodeId, identity.keyPair.private).also { it.identityPublicBytes = identity.keyPair.public.encoded }
@@ -51,6 +52,14 @@ class MainActivity : ComponentActivity() {
         buildHome()
         updateNetBirdStatus()
     }
+        } catch (t: Throwable) {
+            android.util.Log.e("MeshMessenger", "Startup failure", t)
+            android.app.AlertDialog.Builder(this)
+                .setTitle("Ошибка запуска")
+                .setMessage("${t.javaClass.simpleName}: ${t.message}")
+                .setPositiveButton("Закрыть", null)
+                .show()
+        }
 
     private fun buildHome() {
         status = TextView(this).apply { textSize = 17f; setPadding(24, 24, 24, 12) }
