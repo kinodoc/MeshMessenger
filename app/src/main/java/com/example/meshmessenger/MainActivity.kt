@@ -218,22 +218,134 @@ class MainActivity : ComponentActivity() {
 
     private fun openChat(contact: ContactStore.Contact) {
         selected = contact
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20, 8, 20, 8) }
-        val history = TextView(this).apply { textSize = 15f; setPadding(4, 4, 4, 12) }
-        val input = EditText(this).apply { hint = "Сообщение" }
-        val send = Button(this).apply { text = "Отправить" }
-        box.addView(history); box.addView(input); box.addView(send)
-        fun refresh() { history.text = chats.messages(contact.nodeId).joinToString("\n") { if (it.mine) "Вы: ${it.text}" else "${contact.name}: ${it.text}" } }
-        refresh()
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(18, 12, 18, 12)
+            setBackgroundColor(0xFF05080D.toInt())
+        }
+
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(8, 8, 8, 14)
+            setBackgroundColor(0xFF0A111A.toInt())
+        }
+
+        val title = TextView(this).apply {
+            text = contact.name
+            textSize = 21f
+            setTextColor(0xFF00E5FF.toInt())
+            setTypeface(null, android.graphics.Typeface.BOLD)
+        }
+
+        val nodeInfo = TextView(this).apply {
+            text = "NODE ${contact.nodeId.take(16)}"
+            textSize = 11f
+            setTextColor(0xFF6B8799.toInt())
+            setPadding(0, 4, 0, 0)
+        }
+
+        val connection = TextView(this).apply {
+            text = "● MESH CONNECTED"
+            textSize = 11f
+            setTextColor(0xFF00FF9D.toInt())
+            setPadding(0, 5, 0, 0)
+        }
+
+        header.addView(title)
+        header.addView(nodeInfo)
+        header.addView(connection)
+
+        val history = TextView(this).apply {
+            textSize = 15f
+            setTextColor(0xFFE7F7FF.toInt())
+            setPadding(14, 18, 14, 18)
+            gravity = android.view.Gravity.BOTTOM
+        }
+
+        val scroll = ScrollView(this).apply {
+            setBackgroundColor(0xFF05080D.toInt())
+            addView(history)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        }
+
+        val inputRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(6, 10, 6, 6)
+            setBackgroundColor(0xFF0A111A.toInt())
+        }
+
+        val input = EditText(this).apply {
+            hint = "СООБЩЕНИЕ..."
+            hintTextColor = 0xFF527080.toInt()
+            setTextColor(0xFFE7F7FF.toInt())
+            textSize = 15f
+            setSingleLine(false)
+            maxLines = 4
+            setPadding(16, 10, 16, 10)
+            setBackgroundColor(0xFF101B26.toInt())
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+            ).apply {
+                setMargins(0, 0, 10, 0)
+            }
+        }
+
+        val send = Button(this).apply {
+            text = "➤"
+            textSize = 22f
+            setTextColor(0xFF00E5FF.toInt())
+            setBackgroundColor(0xFF0D202B.toInt())
+            minWidth = 58
+            minHeight = 58
+        }
+
+        inputRow.addView(input)
+        inputRow.addView(send)
+
+        fun refresh() {
+            val messages = chats.messages(contact.nodeId)
+            history.text = messages.joinToString("\n\n") { message ->
+                if (message.mine) {
+                    "                         YOU\n                         ${message.text}"
+                } else {
+                    "${contact.name.uppercase()}\n${message.text}"
+                }
+            }
+            scroll.post { scroll.fullScroll(android.view.View.FOCUS_DOWN) }
+        }
+
         send.setOnClickListener {
-            val text = input.text.toString().trim(); if (text.isEmpty()) return@setOnClickListener
+            val text = input.text.toString().trim()
+            if (text.isEmpty()) return@setOnClickListener
+
             val public = CryptoManager.publicKeyFromBase64(contact.publicKeyBase64)
             val packet = router.createEncryptedMessage(contact.nodeId, public, text)
             node?.send(packet) ?: queue.enqueue(packet)
             chats.add(contact.nodeId, text, true)
-            input.text.clear(); refresh(); log.text = "Сообщение сохранено и отправлено в mesh"
+
+            input.text.clear()
+            refresh()
+            log.text = "Сообщение сохранено и отправлено в mesh"
         }
-        android.app.AlertDialog.Builder(this).setTitle(contact.name).setView(box).setPositiveButton("Готово", null).show()
+
+        root.addView(header)
+        root.addView(scroll)
+        root.addView(inputRow)
+
+        android.app.AlertDialog.Builder(this)
+            .setView(root)
+            .setPositiveButton("ЗАКРЫТЬ", null)
+            .show()
+
+        refresh()
     }
 
     private fun showOwnQr() {
