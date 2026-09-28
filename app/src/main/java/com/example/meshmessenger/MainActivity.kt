@@ -337,7 +337,6 @@ class MainActivity : ComponentActivity() {
                     "${contact.name.uppercase()}" + System.lineSeparator() + "${message.text}"
                 }
             }
-            }
             scroll.post { scroll.fullScroll(android.view.View.FOCUS_DOWN) }
         }
 
