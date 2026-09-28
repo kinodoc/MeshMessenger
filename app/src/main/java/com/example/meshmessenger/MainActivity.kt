@@ -269,11 +269,19 @@ class MainActivity : ComponentActivity() {
         header.addView(nodeInfo)
         header.addView(connection)
 
-        val history = TextView(this).apply {
-            textSize = 15f
-            setTextColor(0xFFE7F7FF.toInt())
-            setPadding(14, 18, 14, 18)
-            gravity = android.view.Gravity.BOTTOM
+        val history = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(12, 14, 12, 14)
+        }
+
+        val scroll = ScrollView(this).apply {
+            setBackgroundColor(0xFF05080D.toInt())
+            addView(history)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
         }
 
         val scroll = ScrollView(this).apply {
