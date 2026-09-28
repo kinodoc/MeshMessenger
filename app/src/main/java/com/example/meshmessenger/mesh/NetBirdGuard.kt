@@ -103,6 +103,11 @@ class NetBirdGuard(private val context: Context) {
         return !onlyNetBird || status() == Status.CONNECTED
     }
 
+    fun isNetBirdAddress(address: java.net.InetAddress): Boolean {
+        val ipv4 = address as? java.net.Inet4Address ?: return false
+        return isNetBirdAddress(ipv4.address)
+    }
+
     private fun isNetBirdAddress(bytes: ByteArray): Boolean {
         if (bytes.size != 4) return false
 
