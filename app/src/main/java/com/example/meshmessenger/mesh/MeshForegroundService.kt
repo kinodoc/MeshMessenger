@@ -47,7 +47,7 @@ class MeshForegroundService : Service() {
         val queue = PendingMessageStore(this)
         node = MeshGattNode(this, adapter, identity.nodeId, router, queue,
             { updateNotification(it) },
-            { updateNotification("Получено сообщение") }
+            { _, _ -> updateNotification("Получено сообщение") }
         ).also { it.start() }
     }
 
