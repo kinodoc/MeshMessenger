@@ -387,6 +387,7 @@ class MainActivity : ComponentActivity() {
         ))
         root.addView(inputRow)
 
+        val dialog = android.app.Dialog(this)
         dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
         dialog.setContentView(root)
         dialog.setCanceledOnTouchOutside(false)
@@ -406,7 +407,6 @@ class MainActivity : ComponentActivity() {
         )
 
         refresh()
-    }
     }
 
     private val ipStatusReceiver = object : android.content.BroadcastReceiver() {
