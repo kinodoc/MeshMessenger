@@ -103,6 +103,25 @@ class NetBirdGuard(private val context: Context) {
         return !onlyNetBird || status() == Status.CONNECTED
     }
 
+    fun localNetBirdIp(): String? {
+        val interfaces = runCatching {
+            NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+        }.getOrDefault(emptyList())
+
+        for (iface in interfaces) {
+            val address = runCatching {
+                iface.inetAddresses.toList()
+                    .firstOrNull { it is Inet4Address && isNetBirdAddress(it) }
+            }.getOrNull()
+
+            if (address is Inet4Address) {
+                return address.hostAddress
+            }
+        }
+
+        return null
+    }
+
     fun isNetBirdAddress(address: java.net.InetAddress): Boolean {
         val ipv4 = address as? java.net.Inet4Address ?: return false
         return isNetBirdAddress(ipv4.address)
