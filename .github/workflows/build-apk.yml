@@ -31,11 +31,12 @@ jobs:
 
       - name: Make Gradle Wrapper executable
         run: chmod +x ./gradlew
+          chmod +x "$HOME/.gradle/wrapper/dists/gradle-8.13-bin/gradle-8.13/bin/gradle"
 
       - name: Fix Gradle permissions
         run: |
           chmod +x ./gradlew
-          find "$HOME/.gradle/wrapper/dists" -type f -path "*/bin/gradle" -exec chmod +x {} ;
+          chmod +x "$HOME/.gradle/wrapper/dists/gradle-8.13-bin/gradle-8.13/bin/gradle"
       - name: Build debug APK
         run: ./gradlew --no-daemon :app:assembleDebug
 
