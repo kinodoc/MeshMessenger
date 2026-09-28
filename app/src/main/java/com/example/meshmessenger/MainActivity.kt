@@ -380,15 +380,33 @@ class MainActivity : ComponentActivity() {
         }
 
         root.addView(header)
-        root.addView(scroll)
+        root.addView(scroll, android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+            0,
+            1f
+        ))
         root.addView(inputRow)
 
-        android.app.AlertDialog.Builder(this)
-            .setView(root)
-            .setPositiveButton("ЗАКРЫТЬ", null)
-            .show()
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        dialog.setContentView(root)
+        dialog.setCanceledOnTouchOutside(false)
+        dialog.setOnShowListener {
+            dialog.window?.setBackgroundDrawable(
+                android.graphics.drawable.ColorDrawable(0xFF05080D.toInt())
+            )
+            dialog.window?.setLayout(
+                android.view.WindowManager.LayoutParams.MATCH_PARENT,
+                android.view.WindowManager.LayoutParams.MATCH_PARENT
+            )
+        }
+        dialog.show()
+        dialog.window?.setLayout(
+            android.view.WindowManager.LayoutParams.MATCH_PARENT,
+            android.view.WindowManager.LayoutParams.MATCH_PARENT
+        )
 
         refresh()
+    }
     }
 
     private val ipStatusReceiver = object : android.content.BroadcastReceiver() {
