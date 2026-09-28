@@ -330,7 +330,7 @@ class MainActivity : ComponentActivity() {
                     gravity = if (message.mine) android.view.Gravity.END else android.view.Gravity.START
                 }
                 val bubble = TextView(this).apply {
-                    text = message.text + if (message.mine) "  ✓" else ""
+                    text = if (message.mine) android.text.SpannableStringBuilder().apply { append(message.text); append("  "); val start = length; append("✓"); setSpan(android.text.style.ForegroundColorSpan(0xFFFF9800.toInt()), start, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) } else message.text
                     textSize = 16f
                     setTextColor(0xFFE7F7FF.toInt())
                     setPadding(18, 12, 18, 12)
