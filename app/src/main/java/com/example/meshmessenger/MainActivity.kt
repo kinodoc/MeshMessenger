@@ -349,7 +349,7 @@ class MainActivity : ComponentActivity() {
 
             if (netBird.onlyNetBird) {
                 val ip = contact.netBirdIp.trim()
-                val connected = netBird.status() == NetBirdGuard.Status.CONNECTED
+                val connected = netBird.status() == NetBirdGuard.Status.CONNECTED || !netBird.localNetBirdIp().isNullOrBlank()
 
                 if (ip.isBlank()) {
                     chats.add(contact.nodeId, text, true, ChatStore.Delivery.NOT_SENT, packet.messageId.toString())
