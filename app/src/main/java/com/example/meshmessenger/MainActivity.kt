@@ -282,7 +282,7 @@ class MainActivity : ComponentActivity() {
 
         val input = EditText(this).apply {
             hint = "СООБЩЕНИЕ..."
-            hintTextColor = 0xFF527080.toInt()
+            setHintTextColor(0xFF527080.toInt())
             setTextColor(0xFFE7F7FF.toInt())
             textSize = 15f
             setSingleLine(false)
