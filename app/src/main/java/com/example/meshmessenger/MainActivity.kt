@@ -52,7 +52,7 @@ class MainActivity : ComponentActivity() {
         buildHome()
         updateNetBirdStatus()
     }
-    } catch (t: Throwable) {
+    catch (t: Throwable) {
             android.util.Log.e("MeshMessenger", "Startup failure", t)
             android.app.AlertDialog.Builder(this)
                 .setTitle("Ошибка запуска")
@@ -60,6 +60,7 @@ class MainActivity : ComponentActivity() {
                 .setPositiveButton("Закрыть", null)
                 .show()
         }
+    }
 
     private fun buildHome() {
         status = TextView(this).apply { textSize = 17f; setPadding(24, 24, 24, 12) }
