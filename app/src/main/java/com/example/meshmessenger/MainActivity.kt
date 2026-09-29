@@ -40,6 +40,7 @@ class MainActivity : ComponentActivity() {
     private var pendingQrField: EditText? = null
     private var meshActive = false
     private lateinit var meshButton: Button
+    private var connectionStatusView: TextView? = null
 
     private val qrScanner = registerForActivityResult(ScanContract()) { result ->
         val raw = result.contents?.trim()
@@ -245,7 +246,7 @@ class MainActivity : ComponentActivity() {
             setPadding(0, 4, 0, 0)
         }
 
-        val connection = TextView(this).apply {
+        connectionStatusView = TextView(this).apply {
             text = "● MESH CONNECTED"
             textSize = 11f
             setTextColor(0xFF00FF9D.toInt())
@@ -254,7 +255,7 @@ class MainActivity : ComponentActivity() {
 
         header.addView(title)
         header.addView(nodeInfo)
-        header.addView(connection)
+        header.addView(connectionStatusView)
 
         val history = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -417,7 +418,7 @@ class MainActivity : ComponentActivity() {
             if (intent?.action != MeshForegroundService.ACTION_MESH_STATUS) return
             val active = intent.getBooleanExtra(MeshForegroundService.EXTRA_MESH_ACTIVE, false)
             meshActive = active
-            status.text = if (active) "Mesh активен" else "Mesh выключен"; meshButton.text = if (active) "■ Остановить mesh" else "▶ Запустить mesh"
+            status.text = if (active) "Mesh активен" else "Mesh выключен"; meshButton.text = if (active) "■ Остановить mesh" else "▶ Запустить mesh"; connectionStatusView?.apply { text = if (active) "● MESH ACTIVE" else "● MESH OFFLINE"; setTextColor(if (active) 0xFF00FF9D.toInt() else 0xFF6B8799.toInt()) }
         }
     }
 
