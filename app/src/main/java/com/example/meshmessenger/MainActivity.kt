@@ -10,6 +10,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.net.Uri
@@ -36,6 +38,13 @@ class MainActivity : ComponentActivity() {
     private lateinit var pendingIp: PendingIpMessageStore
     private lateinit var netBird: NetBirdGuard
     private lateinit var netBirdStatus: TextView
+    private val netBirdHandler = Handler(Looper.getMainLooper())
+    private val netBirdCheckRunnable = object : Runnable {
+        override fun run() {
+            updateNetBirdStatus()
+            netBirdHandler.postDelayed(this, 5000L)
+        }
+    }
     private var selected: ContactStore.Contact? = null
     private var pendingQrField: EditText? = null
     private var meshActive = false
@@ -444,6 +453,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        netBirdHandler.removeCallbacks(netBirdCheckRunnable)
+        netBirdCheckRunnable.run()
         try {
             androidx.core.content.ContextCompat.registerReceiver(this, ipStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_IP_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             androidx.core.content.ContextCompat.registerReceiver(this, meshMessageReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_MESSAGE), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
@@ -459,6 +470,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        netBirdHandler.removeCallbacks(netBirdCheckRunnable)
         runCatching { unregisterReceiver(ipStatusReceiver) }
         runCatching { unregisterReceiver(meshMessageReceiver) }
         runCatching { unregisterReceiver(meshStatusReceiver) }
