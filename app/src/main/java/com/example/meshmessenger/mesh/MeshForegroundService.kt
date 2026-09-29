@@ -25,15 +25,20 @@ class MeshForegroundService : Service() {
         const val ACTION_START = "com.example.meshmessenger.START_MESH"
         const val ACTION_STOP = "com.example.meshmessenger.STOP_MESH"
         const val ACTION_SEND_IP = "com.example.meshmessenger.SEND_IP"
-
+	const val ACTION_SEND_MESH = "com.example.meshmessenger.SEND_MESH"
         const val EXTRA_IP = "ip"
         const val EXTRA_PACKET = "packet"
 
         const val ACTION_IP_MESSAGE = "com.example.meshmessenger.IP_MESSAGE"
+        const val ACTION_MESH_MESSAGE = "com.example.meshmessenger.MESH_MESSAGE"
         const val EXTRA_TEXT = "text"
         const val EXTRA_SOURCE_ID = "source_id"
+        const val EXTRA_MESH_TEXT = "mesh_text"
 
         const val ACTION_IP_STATUS = "com.example.meshmessenger.IP_STATUS"
+        const val ACTION_MESH_STATUS = "com.example.meshmessenger.MESH_STATUS"
+        const val ACTION_MESH_STATUS_REQUEST = "com.example.meshmessenger.MESH_STATUS_REQUEST"
+        const val EXTRA_MESH_ACTIVE = "mesh_active"
         const val EXTRA_PACKET_ID = "packet_id"
         const val EXTRA_IP_SUCCESS = "ip_success"
 
@@ -41,6 +46,7 @@ class MeshForegroundService : Service() {
     }
 
     private var node: MeshGattNode? = null
+    private var meshEnabled = false
     private var ipTransport: MeshIpTransport? = null
     private var netBirdGuard: NetBirdGuard? = null
     private lateinit var pendingIp: PendingIpMessageStore
@@ -75,14 +81,37 @@ class MeshForegroundService : Service() {
     ): Int {
         when (intent?.action) {
 
+            ACTION_MESH_STATUS_REQUEST -> {
+                sendMeshStatus(meshEnabled && (node != null || ipTransport != null))
+            }
+
+            ACTION_START -> {
+                meshEnabled = true
+                startMesh()
+            }
+
             ACTION_STOP -> {
+                meshEnabled = false
                 stopMesh()
                 stopSelf()
                 return START_NOT_STICKY
             }
 
+            ACTION_SEND_MESH -> {
+                val encoded = intent.getByteArrayExtra(EXTRA_PACKET)
+                if (encoded != null) {
+                    runCatching {
+                        val packet = MeshPacket.decode(encoded)
+                        if (packet != null) {
+                            node?.send(packet)
+                        }
+                    }.onFailure {
+                        updateNotification("Ошибка отправки Mesh-пакета")
+                    }
+                }
+            }
+
             ACTION_SEND_IP -> {
-                startMesh()
 
                 val ip = intent.getStringExtra(EXTRA_IP)
                 val bytes = intent.getByteArrayExtra(EXTRA_PACKET)
@@ -108,7 +137,7 @@ class MeshForegroundService : Service() {
             }
 
             else -> {
-                startMesh()
+                sendMeshStatus(meshEnabled && (node != null || ipTransport != null))
             }
         }
 
@@ -157,8 +186,8 @@ class MeshForegroundService : Service() {
                 router,
                 queue,
                 { updateNotification(it) },
-                { _, _ ->
-                    updateNotification("Получено сообщение")
+                { text, sourceId ->
+                    handleMeshMessage(text, sourceId)
                 }
             ).also {
                 it.start()
@@ -166,6 +195,7 @@ class MeshForegroundService : Service() {
         }
 
         updateNotification("BLE + внутренняя сеть работают")
+        sendMeshStatus(meshEnabled && (node != null || ipTransport != null))
     }
 
     private fun retryPendingIp() {
@@ -210,6 +240,15 @@ class MeshForegroundService : Service() {
         sendBroadcast(statusIntent)
     }
 
+    private fun handleMeshMessage(text: String, sourceId: String) {
+        val intent = Intent(ACTION_MESH_MESSAGE).apply {
+            setPackage(packageName)
+            putExtra(EXTRA_MESH_TEXT, text)
+            putExtra(EXTRA_SOURCE_ID, sourceId)
+        }
+        sendBroadcast(intent)
+    }
+
     private fun handleIpMessage(
         text: String,
         sourceId: String
@@ -233,6 +272,7 @@ class MeshForegroundService : Service() {
         ipTransport = null
 
         netBirdGuard = null
+        sendMeshStatus(false)
     }
 
     private fun createChannel() {
@@ -273,6 +313,15 @@ class MeshForegroundService : Service() {
             .setContentIntent(open)
             .build()
     }
+
+    private fun sendMeshStatus(active: Boolean) {
+        val intent = Intent(ACTION_MESH_STATUS).apply {
+            setPackage(packageName)
+            putExtra(EXTRA_MESH_ACTIVE, active)
+        }
+        sendBroadcast(intent)
+    }
+
 
     private fun updateNotification(text: String) {
         getSystemService(

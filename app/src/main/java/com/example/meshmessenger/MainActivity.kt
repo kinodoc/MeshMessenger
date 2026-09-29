@@ -31,15 +31,15 @@ class MainActivity : ComponentActivity() {
     private lateinit var log: TextView
     private lateinit var identity: IdentityStore
     private lateinit var router: MeshRouter
-    private lateinit var queue: PendingMessageStore
     private lateinit var contacts: ContactStore
     private lateinit var chats: ChatStore
     private lateinit var pendingIp: PendingIpMessageStore
     private lateinit var netBird: NetBirdGuard
     private lateinit var netBirdStatus: TextView
-    private var node: MeshGattNode? = null
     private var selected: ContactStore.Contact? = null
     private var pendingQrField: EditText? = null
+    private var meshActive = false
+    private lateinit var meshButton: Button
 
     private val qrScanner = registerForActivityResult(ScanContract()) { result ->
         val raw = result.contents?.trim()
@@ -56,7 +56,6 @@ class MainActivity : ComponentActivity() {
         adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
         identity = IdentityStore(this)
         router = MeshRouter(identity.nodeId, identity.keyPair.private).also { it.identityPublicBytes = identity.keyPair.public.encoded }
-        queue = PendingMessageStore(this)
         contacts = ContactStore(this)
         chats = ChatStore(this)
         pendingIp = PendingIpMessageStore(this)
@@ -93,7 +92,7 @@ class MainActivity : ComponentActivity() {
             }
         })
 
-        root.addView(Button(this).apply { text = "▶ Запустить mesh"; setOnClickListener { requestMeshPermissions() } })
+        meshButton = Button(this).apply { text = "▶ Запустить mesh"; setOnClickListener { if (meshActive) { startService(Intent(this@MainActivity, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_STOP)) } else { requestMeshPermissions() } } }; root.addView(meshButton)
         root.addView(Button(this).apply { text = "🔋 Состояние фоновой работы"; setOnClickListener { showBatteryStatus() } })
         root.addView(Button(this).apply { text = "＋ Добавить контакт"; setOnClickListener { addContactDialog() } })
         root.addView(Button(this).apply { text = "▣ Мой QR-код"; setOnClickListener { showOwnQr() } })
@@ -139,21 +138,9 @@ class MainActivity : ComponentActivity() {
 
     private fun startMeshIfAllowed() {
         if (!adapter.isEnabled) { status.text = "Включи Bluetooth"; return }
-        if (node != null) return
         startService(Intent(this, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_START))
-        node = MeshGattNode(this, adapter, identity.nodeId, router, queue,
-            { status.text = it },
-            { packetText, sourceId -> handleIncoming(packetText, sourceId) }
-        ).also { it.start() }
-        val scanner = adapter.bluetoothLeScanner
-        val settings = android.bluetooth.le.ScanSettings.Builder().setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY).build()
-        val filter = android.bluetooth.le.ScanFilter.Builder().setServiceUuid(android.os.ParcelUuid(MeshProtocol.SERVICE_UUID)).build()
-        scanner.startScan(listOf(filter), settings, object : android.bluetooth.le.ScanCallback() {
-            override fun onScanResult(callbackType: Int, result: android.bluetooth.le.ScanResult) { node?.connect(result.device) }
-            override fun onScanFailed(errorCode: Int) { status.text = "BLE scan error: $errorCode" }
-        })
+        status.text = "Mesh запускается..."
     }
-
     private fun handleIncoming(text: String, sourceId: String) {
         chats.add(sourceId, text, false)
         val contact = contacts.all().firstOrNull { it.nodeId == sourceId }
@@ -377,7 +364,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             } else {
-                node?.send(packet) ?: queue.enqueue(packet)
+                startService(Intent(this, MeshForegroundService::class.java).apply { action = MeshForegroundService.ACTION_SEND_MESH; putExtra(MeshForegroundService.EXTRA_PACKET, packet.encode()) })
                 chats.add(contact.nodeId, text, true, ChatStore.Delivery.SENT, packet.messageId.toString())
                 log.text = "✓ Отправлено через mesh"
             }
@@ -416,6 +403,24 @@ class MainActivity : ComponentActivity() {
         refresh()
     }
 
+    private val meshMessageReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != MeshForegroundService.ACTION_MESH_MESSAGE) return
+            val text = intent.getStringExtra(MeshForegroundService.EXTRA_MESH_TEXT) ?: return
+            val sourceId = intent.getStringExtra(MeshForegroundService.EXTRA_SOURCE_ID) ?: return
+            handleIncoming(text, sourceId)
+        }
+    }
+
+    private val meshStatusReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != MeshForegroundService.ACTION_MESH_STATUS) return
+            val active = intent.getBooleanExtra(MeshForegroundService.EXTRA_MESH_ACTIVE, false)
+            meshActive = active
+            status.text = if (active) "Mesh активен" else "Mesh выключен"; meshButton.text = if (active) "■ Остановить mesh" else "▶ Запустить mesh"
+        }
+    }
+
     private val ipStatusReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != MeshForegroundService.ACTION_IP_STATUS) return
@@ -444,10 +449,15 @@ class MainActivity : ComponentActivity() {
             android.content.IntentFilter(MeshForegroundService.ACTION_IP_STATUS),
             androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
         )
+        androidx.core.content.ContextCompat.registerReceiver(this, meshMessageReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_MESSAGE), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+        androidx.core.content.ContextCompat.registerReceiver(this, meshStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+        startService(Intent(this, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_MESH_STATUS_REQUEST))
     }
 
     override fun onStop() {
         runCatching { unregisterReceiver(ipStatusReceiver) }
+        runCatching { unregisterReceiver(meshMessageReceiver) }
+        runCatching { unregisterReceiver(meshStatusReceiver) }
         super.onStop()
     }
 
@@ -495,7 +505,6 @@ class MainActivity : ComponentActivity() {
         return Bitmap.createBitmap(pixels, size, size, Bitmap.Config.ARGB_8888)
     }
 
-    override fun onDestroy() { node?.stop(); super.onDestroy() }
 }
 
 private fun LinearLayout.children(): Sequence<android.view.View> = (0 until childCount).asSequence().map { getChildAt(it) }

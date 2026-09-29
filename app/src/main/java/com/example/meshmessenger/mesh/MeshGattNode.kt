@@ -22,6 +22,8 @@ class MeshGattNode(
     private val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private var server: BluetoothGattServer? = null
     private var advertiser: BluetoothLeAdvertiser? = null
+    private var scanner: BluetoothLeScanner? = null
+    private var scanCallback: ScanCallback? = null
     private val peers = mutableMapOf<String, BluetoothGatt>()
     private val notifyReady = mutableSetOf<String>()
     private val service = MeshProtocol.SERVICE_UUID
@@ -62,6 +64,34 @@ class MeshGattNode(
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings) { onStatus("Mesh активен • BLE relay готов") }
             override fun onStartFailure(errorCode: Int) { onStatus("BLE advertising error: $errorCode") }
         })
+
+        scanner = adapter.bluetoothLeScanner
+        val bleScanner = scanner ?: run {
+            onStatus("BLE scan недоступен")
+            return
+        }
+
+        val scanSettings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
+
+        val scanFilter = ScanFilter.Builder()
+            .setServiceUuid(android.os.ParcelUuid(service))
+            .build()
+
+        scanCallback = object : ScanCallback() {
+            override fun onScanResult(callbackType: Int, result: ScanResult) {
+                connect(result.device)
+            }
+            override fun onScanFailed(errorCode: Int) {
+                onStatus("BLE scan error: $errorCode")
+            }
+        }
+        bleScanner.startScan(
+            listOf(scanFilter),
+            scanSettings,
+            scanCallback
+        )
     }
 
     @SuppressLint("MissingPermission")
@@ -152,6 +182,9 @@ class MeshGattNode(
     }
 
     fun stop() {
+        scanner?.let { sc -> scanCallback?.let { cb -> sc.stopScan(cb) } }
+        scanCallback = null
+        scanner = null
         advertiser?.stopAdvertising(object : AdvertiseCallback() {})
         peers.values.forEach { runCatching { it.close() } }
         peers.clear()
