@@ -18,6 +18,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+    <activity android:name="com.journeyapps.barcodescanner.CaptureActivity" android:screenOrientation="portrait" android:exported="false" />
     <service android:name=".mesh.MeshForegroundService" android:exported="false" android:foregroundServiceType="connectedDevice" />
     </application>
 </manifest>
