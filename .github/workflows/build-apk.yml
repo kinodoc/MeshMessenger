@@ -32,7 +32,7 @@ jobs:
       - name: Prepare Gradle Wrapper
         run: |
           chmod +x ./gradlew
-          ./gradlew --version || true
+          ./gradlew --version >/dev/null 2>&1 || true
           find "$HOME/.gradle/wrapper/dists" -type f -path "*/bin/gradle" -exec chmod +x {} +
 
       - name: Build debug APK
