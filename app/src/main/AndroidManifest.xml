@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
@@ -18,7 +18,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-    <activity android:name="com.journeyapps.barcodescanner.CaptureActivity" android:screenOrientation="portrait" android:exported="false" />
+    <activity android:name="com.journeyapps.barcodescanner.CaptureActivity" android:screenOrientation="portrait" android:exported="false" tools:replace="android:screenOrientation" />
     <service android:name=".mesh.MeshForegroundService" android:exported="false" android:foregroundServiceType="connectedDevice" />
     </application>
 </manifest>
