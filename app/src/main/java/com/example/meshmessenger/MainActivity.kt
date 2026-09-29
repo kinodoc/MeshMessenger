@@ -444,14 +444,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        androidx.core.content.ContextCompat.registerReceiver(
-            this,
-            ipStatusReceiver,
-            android.content.IntentFilter(MeshForegroundService.ACTION_IP_STATUS),
-            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
-        )
-        androidx.core.content.ContextCompat.registerReceiver(this, meshMessageReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_MESSAGE), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
-        androidx.core.content.ContextCompat.registerReceiver(this, meshStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+        try {
+            androidx.core.content.ContextCompat.registerReceiver(this, ipStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_IP_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+            androidx.core.content.ContextCompat.registerReceiver(this, meshMessageReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_MESSAGE), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+            androidx.core.content.ContextCompat.registerReceiver(this, meshStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+        } catch (t: Throwable) {
+            android.util.Log.e("MeshMessenger", "onStart failure", t)
+            android.app.AlertDialog.Builder(this)
+                .setTitle("Ошибка onStart")
+                .setMessage("${t.javaClass.simpleName}: ${t.message}")
+                .setPositiveButton("Закрыть", null)
+                .show()
+        }
     }
 
     override fun onStop() {
