@@ -28,7 +28,7 @@ import java.nio.charset.StandardCharsets
 import java.util.Base64
 
 class MainActivity : ComponentActivity() {
-    private lateinit var adapter: BluetoothAdapter
+    private var adapter: BluetoothAdapter? = null
     private lateinit var status: TextView
     private lateinit var log: TextView
     private lateinit var identity: IdentityStore
@@ -58,12 +58,12 @@ class MainActivity : ComponentActivity() {
         log.text = "QR-код считан. Проверь данные и нажми «Добавить»."
     }
 
-    private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { startMeshIfAllowed() }
+    private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result -> if (result.values.all { it }) startMeshIfAllowed() else { status.text = "Разрешения Bluetooth не предоставлены"; log.text = "Mesh не запущен: разрешения Bluetooth необходимы для работы." } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         try {
-        adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
         identity = IdentityStore(this)
         router = MeshRouter(identity.nodeId, identity.keyPair.private).also { it.identityPublicBytes = identity.keyPair.public.encoded }
         contacts = ContactStore(this)
@@ -147,7 +147,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startMeshIfAllowed() {
-        if (!adapter.isEnabled) { status.text = "Включи Bluetooth"; return }
+        val bluetoothAdapter = adapter ?: run { status.text = "Bluetooth недоступен"; log.text = "На этом устройстве не найден Bluetooth-адаптер."; return }
+        if (!bluetoothAdapter.isEnabled) { status.text = "Включи Bluetooth"; return }
         startService(Intent(this, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_START))
         status.text = "Mesh запускается..."
     }
