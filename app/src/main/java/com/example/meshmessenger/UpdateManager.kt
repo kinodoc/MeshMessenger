@@ -18,14 +18,19 @@ class UpdateManager(private val context: Context) {
     private var pendingFile: File? = null
 
     /**
-     * Updates use a normal Internet network instead of the NetBird VPN.
-     * This keeps GitHub reachable when NetBird is configured for internal-only traffic.
+     * GitHub updates must use the real Internet connection, never the NetBird VPN.
+     * Do not fall back to URL.openConnection(): Android may route that through the VPN.
      */
     private fun openHttpConnection(url: String): HttpURLConnection {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val candidates = cm.allNetworks.mapNotNull { network ->
             val caps = cm.getNetworkCapabilities(network) ?: return@mapNotNull null
+            val isInternetTransport =
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
             if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
+                !isInternetTransport ||
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
             ) return@mapNotNull null
             network
@@ -34,8 +39,9 @@ class UpdateManager(private val context: Context) {
                 ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
         }
 
-        return (candidates.firstOrNull()?.openConnection(URL(url)) as? HttpURLConnection)
-            ?: (URL(url).openConnection() as HttpURLConnection)
+        val network = candidates.firstOrNull()
+            ?: error("Обычная интернет-сеть (Wi‑Fi/4G/5G) недоступна для проверки обновлений")
+        return network.openConnection(URL(url)) as HttpURLConnection
     }
 
     companion object {

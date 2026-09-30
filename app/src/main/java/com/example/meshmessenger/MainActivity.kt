@@ -198,8 +198,7 @@ class MainActivity : ComponentActivity() {
                 }
             }.onFailure { error ->
                 if (manual) {
-                    val cause = error.cause?.let { "\nПричина: ${it.javaClass.simpleName}: ${it.message}" }.orEmpty()
-                    updateStatus.text = "Не удалось проверить обновление: ${error.javaClass.simpleName}: ${error.message ?: "без сообщения"}$cause"
+                    updateStatus.text = "Не удалось проверить обновление: ${error.message ?: "Нет обычного интернет-соединения"}"
                 }
             }
         }
