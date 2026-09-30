@@ -20,8 +20,8 @@ android {
         applicationId = "com.example.meshmessenger"
         minSdk = 26
         targetSdk = 36
-        versionCode = 41
-        versionName = "0.24.15"
+        versionCode = 42
+        versionName = "0.24.16"
     }
 
     signingConfigs {

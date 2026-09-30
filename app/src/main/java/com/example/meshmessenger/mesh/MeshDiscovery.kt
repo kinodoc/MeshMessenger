@@ -37,6 +37,8 @@ class MeshDiscovery(
     private val peers = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val netBirdPeers = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val sockets = java.util.Collections.synchronizedSet(mutableSetOf<DatagramSocket>())
+    @Volatile
+    private var discoverySocket: DatagramSocket? = null
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
@@ -64,24 +66,30 @@ class MeshDiscovery(
     private fun startReceiver(network: Network?) {
         executor.execute {
             runCatching {
+                // Keep one long-lived socket bound to the discovery port. The old
+                // implementation created a fresh ephemeral socket for every probe;
+                // peers replied to that ephemeral source port after it was already
+                // closed, so NetBird discovery never completed.
                 DatagramSocket(null).use { s ->
                     s.reuseAddress = true
+                    s.broadcast = true
                     s.bind(java.net.InetSocketAddress(PORT))
-                    network?.bindSocket(s)
+                    discoverySocket = s
                     sockets.add(s)
-                    onStatus(if (network == null) "IP discovery LAN готов" else "NetBird discovery готов")
+                    onStatus("IP discovery UDP/$PORT готов")
                     val buffer = ByteArray(4096)
                     while (running.get()) {
                         val packet = DatagramPacket(buffer, buffer.size)
                         s.receive(packet)
-                        handle(packet, s)
+                        handle(packet)
                     }
                     sockets.remove(s)
+                    if (discoverySocket === s) discoverySocket = null
                 }
             }.onFailure {
                 if (running.get()) {
-                    val prefix = if (network == null) "IP discovery LAN: " else "NetBird discovery: "
-                    onStatus(prefix + (it.message ?: "ошибка"))
+                    discoverySocket = null
+                    onStatus("IP discovery: " + (it.message ?: "ошибка"))
                 }
             }
         }
@@ -89,6 +97,8 @@ class MeshDiscovery(
 
     fun stop() {
         running.set(false)
+        discoverySocket?.let { runCatching { it.close() } }
+        discoverySocket = null
         sockets.toList().forEach { runCatching { it.close() } }
         sockets.clear()
         peers.clear()
@@ -125,10 +135,12 @@ class MeshDiscovery(
         targets.addAll(netBirdTargets())
         if (targets.isEmpty()) return
         val bytes = payload()
-        val network = netBirdNetwork() ?: return
+        // The persistent discovery socket is deliberately not pinned to one
+        // Network. Its destination is a NetBird /16 address, so Android routing
+        // selects the VPN route while the same socket remains usable for LAN.
         for (target in targets) {
             if (target is Inet4Address && isNetBirdAddress(target)) {
-                send(bytes, target, network)
+                send(bytes, target, null)
             }
         }
     }
@@ -164,15 +176,15 @@ class MeshDiscovery(
 
     private fun send(bytes: ByteArray, target: InetAddress, network: Network?) {
         runCatching {
-            DatagramSocket().use { s ->
-                s.broadcast = true
-                network?.bindSocket(s)
-                s.send(DatagramPacket(bytes, bytes.size, target, PORT))
-            }
+            val s = discoverySocket ?: return
+            // Do not bind this shared socket to a specific Network: discovery must
+            // reach both LAN broadcast addresses and NetBird overlay addresses.
+            // Android's routing table selects the VPN for 100.64/10 destinations.
+            s.send(DatagramPacket(bytes, bytes.size, target, PORT))
         }
     }
 
-    private fun handle(packet: DatagramPacket, replySocket: DatagramSocket) {
+    private fun handle(packet: DatagramPacket) {
         val text = String(packet.data, packet.offset, packet.length, Charsets.UTF_8)
         val parts = text.split("|", limit = 4)
         if (parts.size != 4 || parts[0] != MAGIC) return
@@ -190,13 +202,11 @@ class MeshDiscovery(
         onPeer(id, name, key, packet.address.hostAddress.orEmpty())
         runCatching {
             val reply = payload()
-            if (viaNetBird) {
-                netBirdNetwork()?.let { network ->
-                    send(reply, packet.address, network)
-                }
-            } else {
-                replySocket.send(DatagramPacket(reply, reply.size, packet.address, packet.port))
-            }
+            // Reply on the same persistent UDP socket. This guarantees the reply
+            // returns to the discovery listener instead of a closed ephemeral port.
+            discoverySocket?.send(
+                DatagramPacket(reply, reply.size, packet.address, packet.port)
+            )
         }
     }
 

@@ -101,7 +101,9 @@ class MeshForegroundService : Service() {
         chats = ChatStore(this)
         retryHandler.post(retryRunnable)
         meshEnabled = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_ENABLED, true)
-        if (meshEnabled) startMesh()
+        // NetBird/IP discovery stays alive independently of the BLE mesh toggle.
+        // The toggle now controls only the BLE relay layer.
+        startMesh(startBle = meshEnabled)
     }
 
     override fun onStartCommand(
@@ -113,18 +115,18 @@ class MeshForegroundService : Service() {
 
             ACTION_APP_START -> {
                 updateNotification("Mesh Messenger работает")
-                if (meshEnabled && node == null && ipTransport == null) startMesh()
-                else sendMeshStatus(meshEnabled && (node != null || ipTransport != null))
+                if (meshEnabled && node == null) startMesh(startBle = true)
+                else sendMeshStatus(node != null)
             }
 
             ACTION_MESH_STATUS_REQUEST -> {
-                sendMeshStatus(meshEnabled && (node != null || ipTransport != null))
+                sendMeshStatus(node != null)
             }
 
             ACTION_START -> {
                 meshEnabled = true
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, true).apply()
-                startMesh()
+                startMesh(startBle = true)
             }
 
             ACTION_STOP -> {
@@ -157,11 +159,8 @@ class MeshForegroundService : Service() {
                     val packet = MeshPacket.decode(bytes)
 
                     if (packet != null) {
+                        if (ipTransport == null) startMesh(startBle = false)
                         val success = ipTransport?.send(packet, ip) == true
-
-                        if (success) {
-                            pendingIp.remove(packet.messageId)
-                        }
 
                         sendIpStatus(
                             packet.messageId.toString(),
@@ -174,17 +173,17 @@ class MeshForegroundService : Service() {
             }
 
             else -> {
-                sendMeshStatus(meshEnabled && (node != null || ipTransport != null))
+                sendMeshStatus(node != null)
             }
         }
 
         return START_STICKY
     }
 
-    private fun startMesh() {
-        diagnostics.event("MESH_START")
-        if (node != null || ipTransport != null) {
-            sendMeshStatus(meshEnabled && (node != null || ipTransport != null))
+    private fun startMesh(startBle: Boolean) {
+        diagnostics.event("MESH_START", "ble=$startBle")
+        if (startBle && node != null) {
+            sendMeshStatus(true)
             return
         }
 
@@ -199,9 +198,9 @@ class MeshForegroundService : Service() {
 
         val queue = PendingMessageStore(this)
 
-        netBirdGuard = NetBirdGuard(this)
+        netBirdGuard = netBirdGuard ?: NetBirdGuard(this)
 
-        runCatching {
+        if (discovery == null) runCatching {
             discovery = MeshDiscovery(
                 localId = identity.nodeId,
                 localName = identity.displayName,
@@ -248,7 +247,7 @@ class MeshForegroundService : Service() {
             android.util.Log.e("MeshMessenger", "Discovery start failed", it)
         }
 
-        runCatching {
+        if (ipTransport == null) runCatching {
             ipTransport = MeshIpTransport(
                 localId = identity.nodeId,
                 router = router,
@@ -267,6 +266,11 @@ class MeshForegroundService : Service() {
             ipTransport = null
             updateNotification("Внутренняя сеть: не удалось запустить транспорт")
             android.util.Log.e("MeshMessenger", "IP transport start failed", it)
+        }
+
+        if (!startBle) {
+            sendMeshStatus(false)
+            return
         }
 
         val adapter = runCatching {
@@ -316,9 +320,9 @@ class MeshForegroundService : Service() {
             }
         }
 
-        val active = node != null || ipTransport != null
+        val active = node != null
         updateNotification(if (active) "Mesh работает" else "Mesh не удалось запустить")
-        sendMeshStatus(meshEnabled && active)
+        sendMeshStatus(active)
     }
 
     private fun retryPendingIp() {
@@ -344,7 +348,9 @@ class MeshForegroundService : Service() {
             val success = transport.send(packet, entry.ip)
 
             if (success) {
-                pendingIp.remove(entry.id)
+                // Keep the durable entry until the receiver sends a delivery ACK.
+                // A successful TCP write only proves that bytes reached the peer's
+                // socket; it does not prove decrypt/persist/delivery.
                 sendIpStatus(entry.id.toString(), true)
             }
         }
@@ -369,6 +375,7 @@ class MeshForegroundService : Service() {
 
     private fun sendDeliveryStatus(packetId: String) {
         if (packetId.isBlank()) return
+        runCatching { pendingIp.remove(java.util.UUID.fromString(packetId)) }
         sendBroadcast(Intent(ACTION_MESH_DELIVERED).apply {
             setPackage(packageName)
             putExtra(EXTRA_DELIVERED_PACKET_ID, packetId)
@@ -417,22 +424,24 @@ class MeshForegroundService : Service() {
 
     private fun stopMesh() {
         diagnostics.event("MESH_STOP")
-        retryHandler.removeCallbacks(retryRunnable)
-
+        // Stopping Mesh must not tear down NetBird/IP. The user toggle controls
+        // only the BLE relay; NetBird discovery and IP delivery stay available.
         node?.stop()
         node = null
-
-        ipTransport?.stop()
-        ipTransport = null
-
-        discovery?.stop()
-        discovery = null
-
-        netBirdGuard = null
         blePeerCount = 0
-        netBirdPeerCount = 0
         sendPeerStatus()
         sendMeshStatus(false)
+    }
+
+    private fun stopNetBirdLayer() {
+        retryHandler.removeCallbacks(retryRunnable)
+        ipTransport?.stop()
+        ipTransport = null
+        discovery?.stop()
+        discovery = null
+        netBirdGuard = null
+        netBirdPeerCount = 0
+        sendPeerStatus()
     }
 
     private fun createChannel() {
@@ -507,6 +516,7 @@ class MeshForegroundService : Service() {
 
     override fun onDestroy() {
         stopMesh()
+        stopNetBirdLayer()
         super.onDestroy()
     }
 }

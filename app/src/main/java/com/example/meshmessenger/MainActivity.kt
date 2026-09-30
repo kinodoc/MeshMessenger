@@ -723,7 +723,9 @@ class MainActivity : ComponentActivity() {
             return
         }
         val lastSeen = contacts.get(contact.nodeId)?.lastSeenAt ?: 0L
-        val online = meshActive && lastSeen > 0L && System.currentTimeMillis() - lastSeen <= 15_000L
+        // Presence is transport-independent: NetBird discovery must remain
+        // meaningful even when the BLE Mesh toggle is off.
+        val online = lastSeen > 0L && System.currentTimeMillis() - lastSeen <= 30_000L
         view.text = if (online) "● ПОДКЛЮЧЕН" else "● НЕ В СЕТИ"
         view.setTextColor(if (online) 0xFF00FF9D.toInt() else 0xFF6B8799.toInt())
     }

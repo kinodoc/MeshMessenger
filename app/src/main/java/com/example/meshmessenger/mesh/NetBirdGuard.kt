@@ -140,6 +140,14 @@ class NetBirdGuard(private val context: Context) {
                 ?.any { isNetBirdAddress(it.address) } == true
         }?.let { return it }
 
+        // Some NetBird Android builds expose the tunnel interface name (wt0)
+        // but omit the 100.x address from LinkProperties. Prefer that VPN when
+        // several VPN networks exist.
+        vpnNetworks.firstOrNull { network ->
+            val name = cm.getLinkProperties(network)?.interfaceName.orEmpty()
+            NETBIRD_NAMES.matches(name)
+        }?.let { return it }
+
         return if (vpnNetworks.size == 1 && localNetBirdIp() != null) {
             vpnNetworks.first()
         } else {
@@ -178,6 +186,23 @@ class NetBirdGuard(private val context: Context) {
                             if (target.hostAddress != local) result.add(target)
                         }
                     }
+                }
+            }
+        }
+
+        // NetBird assigns one /16 overlay block per account. Some Android VPN
+        // implementations expose only that /16 route, not individual /32 peer
+        // routes. Probe the local /24 as a bounded fallback instead of silently
+        // returning zero targets; known contact IPs are added by the service too.
+        runCatching {
+            val localAddress = local?.let { InetAddress.getByName(it) } as? Inet4Address
+            if (localAddress != null) {
+                val b = localAddress.address.map { it.toInt() and 0xff }
+                for (host in 1..254) {
+                    val target = InetAddress.getByAddress(
+                        byteArrayOf(b[0].toByte(), b[1].toByte(), b[2].toByte(), host.toByte())
+                    )
+                    if (target.hostAddress != local) result.add(target)
                 }
             }
         }
