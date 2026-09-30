@@ -191,9 +191,10 @@ class MeshForegroundService : Service() {
                     contacts.upsert(
                         ContactStore.Contact(
                             nodeId = nodeId,
-                            name = current?.name?.takeIf { it.isNotBlank() } ?: name,
+                            name = name.trim().ifBlank { nodeId.take(8) },
                             publicKeyBase64 = key,
-                            netBirdIp = ip.ifBlank { current?.netBirdIp.orEmpty() }
+                            netBirdIp = ip.ifBlank { current?.netBirdIp.orEmpty() },
+                            lastSeenAt = System.currentTimeMillis()
                         )
                     )
                 },
@@ -254,9 +255,10 @@ class MeshForegroundService : Service() {
                         contacts.upsert(
                             ContactStore.Contact(
                                 nodeId = nodeId,
-                                name = current?.name?.takeIf { it.isNotBlank() } ?: name,
+                                name = name.trim().ifBlank { nodeId.take(8) },
                                 publicKeyBase64 = key,
-                                netBirdIp = current?.netBirdIp.orEmpty()
+                                netBirdIp = current?.netBirdIp.orEmpty(),
+                                lastSeenAt = System.currentTimeMillis()
                             )
                         )
                     },
@@ -317,9 +319,10 @@ class MeshForegroundService : Service() {
             contacts.upsert(
                 ContactStore.Contact(
                     nodeId = packet.sourceId,
-                    name = current?.name?.takeIf { it.isNotBlank() } ?: name,
+                    name = name,
                     publicKeyBase64 = key,
-                    netBirdIp = netBirdIp.ifBlank { current?.netBirdIp.orEmpty() }
+                    netBirdIp = netBirdIp.ifBlank { current?.netBirdIp.orEmpty() },
+                    lastSeenAt = System.currentTimeMillis()
                 )
             )
         }

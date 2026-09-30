@@ -60,6 +60,13 @@ class MainActivity : ComponentActivity() {
     private var meshActive = false
     private lateinit var meshButton: Button
     private var connectionStatusView: TextView? = null
+    private val contactStatusHandler = Handler(Looper.getMainLooper())
+    private val contactStatusRunnable = object : Runnable {
+        override fun run() {
+            updateSelectedContactStatus()
+            contactStatusHandler.postDelayed(this, 2000L)
+        }
+    }
 
     private val qrScanner = registerForActivityResult(ScanContract()) { result ->
         val raw = result.contents?.trim()
@@ -509,11 +516,12 @@ class MainActivity : ComponentActivity() {
         }
 
         connectionStatusView = TextView(this).apply {
-            text = "● MESH CONNECTED"
             textSize = 11f
-            setTextColor(0xFF00FF9D.toInt())
             setPadding(0, 5, 0, 0)
         }
+        updateSelectedContactStatus()
+        contactStatusHandler.removeCallbacks(contactStatusRunnable)
+        contactStatusHandler.post(contactStatusRunnable)
 
         header.addView(title)
         header.addView(nodeInfo)
@@ -690,8 +698,23 @@ class MainActivity : ComponentActivity() {
             if (intent?.action != MeshForegroundService.ACTION_MESH_STATUS) return
             val active = intent.getBooleanExtra(MeshForegroundService.EXTRA_MESH_ACTIVE, false)
             meshActive = active
-            status.text = if (active) "Mesh активен" else "Mesh выключен"; meshButton.text = if (active) "■ Остановить mesh" else "▶ Запустить mesh"; connectionStatusView?.apply { text = if (active) "● MESH ACTIVE" else "● MESH OFFLINE"; setTextColor(if (active) 0xFF00FF9D.toInt() else 0xFF6B8799.toInt()) }
+            status.text = if (active) "Mesh активен" else "Mesh выключен"
+            meshButton.text = if (active) "■ Остановить mesh" else "▶ Запустить mesh"
+            updateSelectedContactStatus()
         }
+    }
+
+    private fun updateSelectedContactStatus() {
+        val view = connectionStatusView ?: return
+        val contact = selected ?: run {
+            view.text = "● СЕТЬ НЕ ПОДКЛЮЧЕНА"
+            view.setTextColor(0xFF6B8799.toInt())
+            return
+        }
+        val lastSeen = contacts.get(contact.nodeId)?.lastSeenAt ?: 0L
+        val online = meshActive && lastSeen > 0L && System.currentTimeMillis() - lastSeen <= 15_000L
+        view.text = if (online) "● ПОДКЛЮЧЕН" else "● НЕ В СЕТИ"
+        view.setTextColor(if (online) 0xFF00FF9D.toInt() else 0xFF6B8799.toInt())
     }
 
     private val peerStatusReceiver = object : android.content.BroadcastReceiver() {
@@ -735,6 +758,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        contactStatusHandler.removeCallbacks(contactStatusRunnable)
+        contactStatusHandler.post(contactStatusRunnable)
         netBirdHandler.removeCallbacks(netBirdCheckRunnable)
         netBirdCheckRunnable.run()
         try {
@@ -755,6 +780,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        contactStatusHandler.removeCallbacks(contactStatusRunnable)
         netBirdHandler.removeCallbacks(netBirdCheckRunnable)
         runCatching { unregisterReceiver(deliveryReceiver) }
         runCatching { unregisterReceiver(ipStatusReceiver) }
