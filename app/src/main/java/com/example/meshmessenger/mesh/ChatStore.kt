@@ -12,6 +12,7 @@ class ChatStore(context: Context) {
     enum class Delivery {
         SENT,
         WAITING,
+        DELIVERED,
         NOT_SENT
     }
 
@@ -84,9 +85,10 @@ class ChatStore(context: Context) {
                 val o = a.optJSONObject(i) ?: continue
 
                 val delivery = runCatching {
-                    Delivery.valueOf(
-                        o.optString("delivery", Delivery.SENT.name)
-                    )
+                    when (o.optString("delivery", Delivery.SENT.name)) {
+                        Delivery.SENT.name -> Delivery.DELIVERED
+                        else -> Delivery.valueOf(o.optString("delivery"))
+                    }
                 }.getOrDefault(Delivery.SENT)
 
                 add(

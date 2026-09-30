@@ -18,7 +18,8 @@ class MeshIpTransport(
     private val queue: PendingMessageStore,
     private val guard: NetBirdGuard,
     private val onStatus: (String) -> Unit,
-    private val onMessage: (String, String) -> Unit
+    private val onMessage: (String, String, MeshPacket, String) -> Unit,
+    private val onDeliveryAck: (String) -> Unit = {}
 ) {
 
     companion object {
@@ -166,7 +167,13 @@ class MeshIpTransport(
                 val text = router.decryptForLocal(packet)
                     ?: "[не удалось расшифровать]"
 
-                onMessage(text, packet.sourceId)
+                if (text.startsWith(MeshRouter.DELIVERY_ACK_PREFIX)) {
+                    onDeliveryAck(text.removePrefix(MeshRouter.DELIVERY_ACK_PREFIX))
+                } else {
+                    onMessage(text, packet.sourceId, packet, remote.hostAddress)
+                    val ack = runCatching { router.createDeliveryAck(packet) }.getOrNull()
+                    if (ack != null) send(ack, remote.hostAddress)
+                }
                 queue.remove(packet.messageId)
 
                 onStatus("IP: получено сообщение")

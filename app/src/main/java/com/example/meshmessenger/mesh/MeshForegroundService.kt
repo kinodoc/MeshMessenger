@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Base64
 import androidx.core.app.NotificationCompat
 import com.example.meshmessenger.MainActivity
 import com.example.meshmessenger.R
@@ -46,6 +47,8 @@ class MeshForegroundService : Service() {
         const val ACTION_PEER_STATUS = "com.example.meshmessenger.PEER_STATUS"
         const val EXTRA_BLE_COUNT = "ble_count"
         const val EXTRA_NETBIRD_COUNT = "netbird_count"
+        const val ACTION_MESH_DELIVERED = "com.example.meshmessenger.MESH_DELIVERED"
+        const val EXTRA_DELIVERED_PACKET_ID = "delivered_packet_id"
 
         private const val RETRY_INTERVAL_MS = 5_000L
     }
@@ -55,6 +58,7 @@ class MeshForegroundService : Service() {
     private var ipTransport: MeshIpTransport? = null
     private var netBirdGuard: NetBirdGuard? = null
     private lateinit var pendingIp: PendingIpMessageStore
+    private lateinit var contacts: ContactStore
     private var blePeerCount = 0
     private var netBirdPeerCount = 0
 
@@ -78,6 +82,7 @@ class MeshForegroundService : Service() {
         )
 
         pendingIp = PendingIpMessageStore(this)
+        contacts = ContactStore(this)
         retryHandler.post(retryRunnable)
     }
 
@@ -180,9 +185,11 @@ class MeshForegroundService : Service() {
             queue = queue,
             guard = netBirdGuard!!,
             onStatus = { updateNotification(it) },
-            onMessage = { text, sourceId ->
+            onMessage = { text, sourceId, packet, remoteIp ->
+                rememberPeer(packet, remoteIp)
                 handleIpMessage(text, sourceId)
-            }
+            },
+            onDeliveryAck = { packetId -> sendDeliveryStatus(packetId) }
         ).also {
             it.start()
         }
@@ -200,9 +207,11 @@ class MeshForegroundService : Service() {
                 router,
                 queue,
                 { updateNotification(it) },
-                { text, sourceId ->
+                { text, sourceId, packet ->
+                    rememberPeer(packet)
                     handleMeshMessage(text, sourceId)
                 },
+                { packetId -> sendDeliveryStatus(packetId) },
                 { count ->
                     blePeerCount = count
                     sendPeerStatus()
@@ -243,6 +252,30 @@ class MeshForegroundService : Service() {
                 sendIpStatus(entry.id.toString(), true)
             }
         }
+    }
+
+    private fun rememberPeer(packet: MeshPacket, netBirdIp: String = "") {
+        val name = packet.senderName.trim().ifBlank { packet.sourceId.take(8) }
+        val key = Base64.encodeToString(packet.senderPublicKey, Base64.NO_WRAP)
+        if (packet.sourceId.isNotBlank() && key.isNotBlank()) {
+            val current = contacts.get(packet.sourceId)
+            contacts.upsert(
+                ContactStore.Contact(
+                    nodeId = packet.sourceId,
+                    name = current?.name?.takeIf { it.isNotBlank() } ?: name,
+                    publicKeyBase64 = key,
+                    netBirdIp = netBirdIp.ifBlank { current?.netBirdIp.orEmpty() }
+                )
+            )
+        }
+    }
+
+    private fun sendDeliveryStatus(packetId: String) {
+        if (packetId.isBlank()) return
+        sendBroadcast(Intent(ACTION_MESH_DELIVERED).apply {
+            setPackage(packageName)
+            putExtra(EXTRA_DELIVERED_PACKET_ID, packetId)
+        })
     }
 
     private fun sendIpStatus(

@@ -140,6 +140,7 @@ class MainActivity : ComponentActivity() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(16, 8, 16, 16) }
         root.addView(status)
         root.addView(TextView(this).apply { text = "Мой Node ID: ${identity.nodeId}" })
+        root.addView(Button(this).apply { text = "Имя: ${identity.displayName}"; setOnClickListener { editOwnName() } })
         root.addView(TextView(this).apply { text = "Версия приложения: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"; setPadding(0, 4, 0, 4) })
 
         netBirdStatus = TextView(this).apply { setPadding(0, 10, 0, 6); textSize = 16f }
@@ -382,11 +383,90 @@ class MainActivity : ComponentActivity() {
             }.setNegativeButton("Отмена", null).show()
     }
 
+    private fun editOwnName() {
+        val input = EditText(this).apply {
+            setText(identity.displayName)
+            selectAll()
+            hint = "Как тебя видят другие"
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Имя в Mesh")
+            .setMessage("Имя хранится только на этом телефоне и передаётся участникам вместе с Node ID.")
+            .setView(input)
+            .setPositiveButton("Сохранить") { _, _ ->
+                identity.displayName = input.text.toString()
+                buildHome()
+                log.text = "Имя сохранено: ${identity.displayName}"
+            }
+            .setNegativeButton("Отмена", null)
+            .show()
+    }
+
     private fun contactsDialog() {
-        val list = contacts.all()
-        if (list.isEmpty()) { android.app.AlertDialog.Builder(this).setTitle("Контакты").setMessage("Пока нет контактов. Добавь контакт через QR-карточку.").setPositiveButton("OK", null).show(); return }
-        val labels = list.map { "${it.name} • ${it.nodeId.take(12)}" }.toTypedArray()
-        android.app.AlertDialog.Builder(this).setTitle("Выбери контакт").setItems(labels) { _, which -> openChat(list[which]) }.setNegativeButton("Закрыть", null).show()
+        val dialog = android.app.Dialog(this)
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(18, 12, 18, 12)
+            setBackgroundColor(0xFF05080D.toInt())
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(8, 8, 8, 14)
+        }
+        header.addView(TextView(this).apply {
+            text = "КОНТАКТЫ"
+            textSize = 22f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(0xFF00E5FF.toInt())
+            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+        })
+        header.addView(Button(this).apply {
+            text = "+"
+            setOnClickListener { dialog.dismiss(); addContactDialog() }
+        })
+        root.addView(header)
+        val scroll = ScrollView(this)
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        contacts.all().forEach { contact ->
+            list.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(16, 14, 16, 14)
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    cornerRadius = 16f
+                    setColor(0xFF0A111A.toInt())
+                    setStroke(1, 0xFF164B61.toInt())
+                }
+                setOnClickListener { dialog.dismiss(); openChat(contact) }
+                addView(TextView(this@MainActivity).apply {
+                    text = contact.name
+                    textSize = 18f
+                    setTextColor(0xFFE7F7FF.toInt())
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = "NODE ID  ${contact.nodeId}"
+                    textSize = 10f
+                    setTextColor(0xFF6B8799.toInt())
+                    setPadding(0, 4, 0, 0)
+                })
+            }.also { (it.layoutParams as? LinearLayout.LayoutParams)?.setMargins(0, 0, 0, 10) })
+        }
+        if (contacts.all().isEmpty()) {
+            list.addView(TextView(this).apply {
+                text = "Контакты появятся автоматически после первого сообщения.\n\nNode ID используется как уникальный идентификатор."
+                textSize = 16f
+                setTextColor(0xFF6B8799.toInt())
+                setPadding(16, 32, 16, 32)
+            })
+        }
+        scroll.addView(list)
+        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(Button(this).apply { text = "ЗАКРЫТЬ"; setOnClickListener { dialog.dismiss() } })
+        dialog.setContentView(root)
+        dialog.show()
+        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(0xFF05080D.toInt()))
+        dialog.window?.setLayout(-1, -1)
     }
 
     private fun openChat(contact: ContactStore.Contact) {
@@ -490,7 +570,7 @@ class MainActivity : ComponentActivity() {
                     gravity = if (message.mine) android.view.Gravity.END else android.view.Gravity.START
                 }
                 val bubble = TextView(this).apply {
-                    text = if (message.mine) android.text.SpannableStringBuilder().apply { append(message.text); append("  "); val start = length; append("✓"); setSpan(android.text.style.ForegroundColorSpan(0xFFFF9800.toInt()), start, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) } else message.text
+                    text = if (message.mine) android.text.SpannableStringBuilder().apply { append(message.text); append("  "); val start = length; append(when (message.delivery) { ChatStore.Delivery.DELIVERED, ChatStore.Delivery.SENT -> "➤"; ChatStore.Delivery.WAITING -> "◷"; ChatStore.Delivery.NOT_SENT -> "×" }); setSpan(android.text.style.ForegroundColorSpan(when (message.delivery) { ChatStore.Delivery.DELIVERED, ChatStore.Delivery.SENT -> 0xFFFF9800.toInt(); ChatStore.Delivery.WAITING -> 0xFF6B8799.toInt(); ChatStore.Delivery.NOT_SENT -> 0xFFFF5555.toInt() }), start, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) } else message.text
                     textSize = 16f
                     setTextColor(0xFFE7F7FF.toInt())
                     setPadding(18, 12, 18, 12)
@@ -512,7 +592,7 @@ class MainActivity : ComponentActivity() {
             if (text.isEmpty()) return@setOnClickListener
 
             val public = CryptoManager.publicKeyFromBase64(contact.publicKeyBase64)
-            val packet = router.createEncryptedMessage(contact.nodeId, public, text)
+            val packet = router.createEncryptedMessage(contact.nodeId, public, text, identity.displayName)
 
             if (netBird.onlyNetBird) {
                 val ip = contact.netBirdIp.trim()
@@ -538,8 +618,8 @@ class MainActivity : ComponentActivity() {
                 }
             } else {
                 startService(Intent(this, MeshForegroundService::class.java).apply { action = MeshForegroundService.ACTION_SEND_MESH; putExtra(MeshForegroundService.EXTRA_PACKET, packet.encode()) })
-                chats.add(contact.nodeId, text, true, ChatStore.Delivery.SENT, packet.messageId.toString())
-                log.text = "✓ Отправлено через mesh"
+                chats.add(contact.nodeId, text, true, ChatStore.Delivery.WAITING, packet.messageId.toString())
+                log.text = "◷ Ожидает подтверждения получателя"
             }
 
             input.text.clear()
@@ -603,6 +683,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val deliveryReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != MeshForegroundService.ACTION_MESH_DELIVERED) return
+            val packetId = intent.getStringExtra(MeshForegroundService.EXTRA_DELIVERED_PACKET_ID) ?: return
+            chats.updateDelivery(packetId, ChatStore.Delivery.DELIVERED)
+            log.text = "➤ Доставлено: получатель подтвердил сообщение"
+        }
+    }
+
     private val ipStatusReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != MeshForegroundService.ACTION_IP_STATUS) return
@@ -610,15 +699,11 @@ class MainActivity : ComponentActivity() {
             val packetId = intent.getStringExtra(MeshForegroundService.EXTRA_PACKET_ID) ?: return
             val success = intent.getBooleanExtra(MeshForegroundService.EXTRA_IP_SUCCESS, false)
 
-            chats.updateDelivery(
-                packetId,
-                if (success) ChatStore.Delivery.SENT else ChatStore.Delivery.NOT_SENT
-            )
-
-            log.text = if (success) {
-                "✓ Отправлено через внутреннюю сеть"
+            if (!success) {
+                chats.updateDelivery(packetId, ChatStore.Delivery.NOT_SENT)
+                log.text = "⚠ Не отправлено: внутренняя сеть недоступна"
             } else {
-                "⚠ Не отправлено: внутренняя сеть недоступна"
+                log.text = "◷ Доставляется через внутреннюю сеть"
             }
         }
     }
@@ -633,6 +718,7 @@ class MainActivity : ComponentActivity() {
         netBirdHandler.removeCallbacks(netBirdCheckRunnable)
         netBirdCheckRunnable.run()
         try {
+            androidx.core.content.ContextCompat.registerReceiver(this, deliveryReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_DELIVERED), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             androidx.core.content.ContextCompat.registerReceiver(this, ipStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_IP_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             androidx.core.content.ContextCompat.registerReceiver(this, meshMessageReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_MESSAGE), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             androidx.core.content.ContextCompat.registerReceiver(this, meshStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
@@ -650,6 +736,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         netBirdHandler.removeCallbacks(netBirdCheckRunnable)
+        runCatching { unregisterReceiver(deliveryReceiver) }
         runCatching { unregisterReceiver(ipStatusReceiver) }
         runCatching { unregisterReceiver(meshMessageReceiver) }
         runCatching { unregisterReceiver(meshStatusReceiver) }
@@ -669,7 +756,7 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        val card = "${identity.nodeId}|Я|${identity.publicKeyBase64}|$ip"
+        val card = "${identity.nodeId}|${identity.displayName}|${identity.publicKeyBase64}|$ip"
         val image = makeQr(card, 720)
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL

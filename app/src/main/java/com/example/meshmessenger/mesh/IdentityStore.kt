@@ -9,6 +9,9 @@ class IdentityStore(context: Context) {
     val keyPair: KeyPair by lazy { loadOrCreate() }
     val nodeId: String by lazy { CryptoManager.keyId(keyPair.public) }
     val publicKeyBase64: String by lazy { CryptoManager.publicKeyBase64(keyPair.public) }
+    var displayName: String
+        get() = prefs.getString("display_name", "Я")?.trim().orEmpty().ifBlank { "Я" }
+        set(value) { prefs.edit().putString("display_name", value.trim().ifBlank { "Я" }).apply() }
 
     private fun loadOrCreate(): KeyPair {
         val pub = prefs.getString("public", null)
