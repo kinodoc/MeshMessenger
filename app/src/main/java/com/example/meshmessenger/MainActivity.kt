@@ -37,6 +37,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var chats: ChatStore
     private lateinit var pendingIp: PendingIpMessageStore
     private lateinit var netBird: NetBirdGuard
+    private lateinit var updater: UpdateManager
     private lateinit var netBirdStatus: TextView
     private lateinit var peerStatus: TextView
     private val netBirdHandler = Handler(Looper.getMainLooper())
@@ -71,7 +72,9 @@ class MainActivity : ComponentActivity() {
         chats = ChatStore(this)
         pendingIp = PendingIpMessageStore(this)
         netBird = NetBirdGuard(this)
+        updater = UpdateManager(this)
         buildHome()
+        netBirdHandler.postDelayed({ checkForUpdates(false) }, 2000L)
         updateNetBirdStatus()
     }
     catch (t: Throwable) {
@@ -110,11 +113,41 @@ class MainActivity : ComponentActivity() {
         root.addView(Button(this).apply { text = "＋ Добавить контакт"; setOnClickListener { addContactDialog() } })
         root.addView(Button(this).apply { text = "▣ Мой QR-код"; setOnClickListener { showOwnQr() } })
         root.addView(Button(this).apply { text = "Контакты"; setOnClickListener { contactsDialog() } })
+        root.addView(Button(this).apply { text = "↻ Проверить обновление"; setOnClickListener { checkForUpdates(true) } })
         root.addView(log)
         setContentView(root)
         status.text = "Mesh Messenger готов • контактов: ${contacts.all().size}"
     }
 
+
+    private fun checkForUpdates(manual: Boolean) {
+        log.text = "Проверяем обновления…"
+        updater.check { result ->
+            result.onSuccess { release ->
+                when {
+                    release == null -> if (manual) log.text = "В GitHub Release нет APK для установки"
+                    !updater.isNewer(release.version) -> if (manual) log.text = "Установлена актуальная версия ${BuildConfig.VERSION_NAME}"
+                    else -> showUpdateDialog(release)
+                }
+            }.onFailure { error ->
+                if (manual) log.text = "Не удалось проверить обновление: ${error.message ?: error.javaClass.simpleName}"
+            }
+        }
+    }
+
+    private fun showUpdateDialog(release: UpdateManager.ReleaseInfo) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Доступно обновление ${release.version}")
+            .setMessage("Текущая версия: ${BuildConfig.VERSION_NAME}\nНовая версия будет загружена напрямую из GitHub и запущена штатным установщиком Android. Настройки и контакты приложения при обычном обновлении сохраняются.")
+            .setPositiveButton("Скачать и установить") { _, _ ->
+                log.text = "Загрузка обновления ${release.version}…"
+                updater.downloadAndInstall(release) { error ->
+                    log.text = "Ошибка загрузки обновления: ${error.message ?: error.javaClass.simpleName}"
+                }
+            }
+            .setNegativeButton("Позже", null)
+            .show()
+    }
 
     private fun updateNetBirdStatus() {
         val state = netBird.status()
@@ -462,6 +495,11 @@ class MainActivity : ComponentActivity() {
                 "⚠ Не отправлено: внутренняя сеть недоступна"
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::updater.isInitialized) updater.resumePendingInstall()
     }
 
     override fun onStart() {
