@@ -41,7 +41,7 @@ class MeshGattNode(
         private const val FRAGMENT_MAGIC: Byte = 0x4D
         private const val FRAGMENT_HEADER_SIZE = 21
         private const val FRAGMENT_CHUNK_SIZE = 180
-        private const val MAX_FRAGMENTS = 64
+        private const val MAX_FRAGMENTS = 65535
         private const val REASSEMBLY_TIMEOUT_MS = 30_000L
     }
 

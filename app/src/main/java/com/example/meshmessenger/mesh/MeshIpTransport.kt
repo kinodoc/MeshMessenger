@@ -24,7 +24,7 @@ class MeshIpTransport(
     companion object {
         const val PORT = 42424
         private const val CONNECT_TIMEOUT_MS = 5000
-        private const val MAX_FRAME_SIZE = 16 * 1024
+        private const val MAX_FRAME_SIZE = 8 * 1024 * 1024
     }
 
     private val running = AtomicBoolean(false)

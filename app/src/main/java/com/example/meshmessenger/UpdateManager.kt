@@ -33,8 +33,8 @@ class UpdateManager(private val context: Context) {
     private fun fetchLatestFromApi(): ReleaseInfo? {
         val connection = (URL(RELEASES_URL).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = 10000
-            readTimeout = 15000
+            connectTimeout = 5000
+            readTimeout = 5000
             setRequestProperty("Accept", "application/vnd.github+json")
             setRequestProperty("User-Agent", "MeshMessenger")
         }
@@ -64,8 +64,8 @@ class UpdateManager(private val context: Context) {
     private fun fetchLatestFromGitHubPage(): ReleaseInfo? {
         val connection = (URL(RELEASE_PAGE_URL).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = 10000
-            readTimeout = 15000
+            connectTimeout = 5000
+            readTimeout = 5000
             instanceFollowRedirects = true
             setRequestProperty("User-Agent", "MeshMessenger")
         }

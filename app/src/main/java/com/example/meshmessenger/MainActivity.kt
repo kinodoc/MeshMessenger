@@ -40,7 +40,15 @@ class MainActivity : ComponentActivity() {
     private lateinit var updater: UpdateManager
     private lateinit var netBirdStatus: TextView
     private lateinit var peerStatus: TextView
+    private lateinit var updateStatus: TextView
     private val netBirdHandler = Handler(Looper.getMainLooper())
+    private val updateHandler = Handler(Looper.getMainLooper())
+    private val hourlyUpdateCheck = object : Runnable {
+        override fun run() {
+            checkForUpdates(false)
+            updateHandler.postDelayed(this, 60L * 60L * 1000L)
+        }
+    }
     private val netBirdCheckRunnable = object : Runnable {
         override fun run() {
             updateNetBirdStatus()
@@ -91,8 +99,9 @@ class MainActivity : ComponentActivity() {
         buildHome()
         requestNotificationPermission()
         requestBluetoothPermissionsIfNeeded()
-        netBirdHandler.postDelayed({ checkForUpdates(false) }, 2000L)
+        // Старт не ждёт сеть: первая автопроверка через час, затем раз в час.
         updateNetBirdStatus()
+        updateHandler.postDelayed(hourlyUpdateCheck, 60L * 60L * 1000L)
     }
     catch (t: Throwable) {
             android.util.Log.e("MeshMessenger", "Startup failure", t)
@@ -102,6 +111,11 @@ class MainActivity : ComponentActivity() {
                 .setPositiveButton("Закрыть", null)
                 .show()
         }
+    }
+
+    override fun onDestroy() {
+        updateHandler.removeCallbacks(hourlyUpdateCheck)
+        super.onDestroy()
     }
 
     private fun buildHome() {
@@ -132,6 +146,12 @@ class MainActivity : ComponentActivity() {
         root.addView(Button(this).apply { text = "▣ Мой QR-код"; setOnClickListener { showOwnQr() } })
         root.addView(Button(this).apply { text = "Контакты"; setOnClickListener { contactsDialog() } })
         root.addView(Button(this).apply { text = "↻ Проверить обновление"; setOnClickListener { checkForUpdates(true) } })
+        updateStatus = TextView(this).apply {
+            textSize = 15f
+            setPadding(0, 2, 0, 8)
+            text = ""
+        }
+        root.addView(updateStatus)
         root.addView(log)
         setContentView(root)
         status.text = "Mesh Messenger готов • контактов: ${contacts.all().size}"
@@ -139,13 +159,22 @@ class MainActivity : ComponentActivity() {
 
 
     private fun checkForUpdates(manual: Boolean) {
-        log.text = "Проверяем обновления…"
+        if (manual) log.text = "Проверяем обновления…"
         updater.check { result ->
             result.onSuccess { release ->
                 when {
-                    release == null -> if (manual) log.text = "В GitHub Release нет APK для установки"
-                    !updater.isNewer(release.version) -> if (manual) log.text = "Установлена актуальная версия ${BuildConfig.VERSION_NAME}"
-                    else -> showUpdateDialog(release)
+                    release == null -> if (manual) {
+                        updateStatus.text = ""
+                        log.text = "В GitHub Release нет APK для установки"
+                    }
+                    !updater.isNewer(release.version) -> if (manual) {
+                        updateStatus.text = ""
+                        log.text = "Установлена актуальная версия ${BuildConfig.VERSION_NAME}"
+                    }
+                    else -> {
+                        updateStatus.text = "Доступно обновление"
+                        showUpdateDialog(release)
+                    }
                 }
             }.onFailure { error ->
                 if (manual) {

@@ -17,15 +17,15 @@ data class MeshPacket(
         require(sourceId.length <= 64 && destinationId.length <= 64)
         require(ttl in 0..16)
         require(senderPublicKey.size <= 512)
-        require(payload.size <= 4096)
+        require(payload.size <= 8 * 1024 * 1024)
         val source = sourceId.toByteArray(StandardCharsets.UTF_8)
         val destination = destinationId.toByteArray(StandardCharsets.UTF_8)
-        return ByteBuffer.allocate(16 + 1 + 1 + source.size + 1 + destination.size + 2 + senderPublicKey.size + 2 + payload.size)
+        return ByteBuffer.allocate(16 + 1 + 1 + source.size + 1 + destination.size + 2 + senderPublicKey.size + 4 + payload.size)
             .putLong(messageId.mostSignificantBits).putLong(messageId.leastSignificantBits)
             .put(ttl.toByte()).put(source.size.toByte()).put(source)
             .put(destination.size.toByte()).put(destination)
             .putShort(senderPublicKey.size.toShort()).put(senderPublicKey)
-            .putShort(payload.size.toShort()).put(payload).array()
+            .putInt(payload.size).put(payload).array()
     }
 
     fun relay(): MeshPacket = copy(ttl = ttl - 1)
@@ -48,8 +48,14 @@ data class MeshPacket(
             val pubLen = b.short.toInt() and 0xffff
             require(pubLen in 1..512 && b.remaining() >= pubLen + 2)
             val publicKey = ByteArray(pubLen) { b.get() }
-            val payloadLen = b.short.toInt() and 0xffff
-            require(payloadLen in 1..4096 && b.remaining() == payloadLen)
+            val lengthHi = b.short.toInt() and 0xffff
+            val payloadLen = if (b.remaining() == lengthHi) {
+                lengthHi
+            } else {
+                val lengthLo = b.short.toInt() and 0xffff
+                (lengthHi shl 16) or lengthLo
+            }
+            require(payloadLen in 1..8 * 1024 * 1024 && b.remaining() == payloadLen)
             val payload = ByteArray(payloadLen) { b.get() }
             MeshPacket(id, source, destination, ttl, publicKey, payload)
         }.getOrNull()
