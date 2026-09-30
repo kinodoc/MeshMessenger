@@ -106,8 +106,6 @@ class MeshForegroundService : Service() {
                 meshEnabled = false
                 stopMesh()
                 updateNotification("Mesh Messenger работает")
-                stopSelf()
-                return START_NOT_STICKY
             }
 
             ACTION_SEND_MESH -> {
