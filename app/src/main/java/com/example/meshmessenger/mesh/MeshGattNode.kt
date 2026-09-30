@@ -17,7 +17,8 @@ class MeshGattNode(
     private val router: MeshRouter,
     private val queue: PendingMessageStore,
     private val onStatus: (String) -> Unit,
-    private val onMessage: (String, String) -> Unit
+    private val onMessage: (String, String) -> Unit,
+    private val onPeerCountChanged: (Int) -> Unit = {}
 ) {
     private val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private var server: BluetoothGattServer? = null
@@ -102,11 +103,13 @@ class MeshGattNode(
             override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     peers[device.address] = g
+                    onPeerCountChanged(peers.size)
                     g.requestMtu(247)
                     g.discoverServices()
                 } else {
                     peers.remove(device.address)
                     notifyReady.remove(device.address)
+                    onPeerCountChanged(peers.size)
                     g.close()
                 }
             }
@@ -133,6 +136,7 @@ class MeshGattNode(
             }
         }
         peers[device.address] = device.connectGatt(context, false, callback)
+        onPeerCountChanged(peers.size)
     }
 
     private fun handleIncoming(from: String, bytes: ByteArray) {
@@ -189,6 +193,7 @@ class MeshGattNode(
         peers.values.forEach { runCatching { it.close() } }
         peers.clear()
         notifyReady.clear()
+        onPeerCountChanged(0)
         server?.close()
         server = null
     }

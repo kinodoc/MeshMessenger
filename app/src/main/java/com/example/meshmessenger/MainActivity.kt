@@ -38,6 +38,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var pendingIp: PendingIpMessageStore
     private lateinit var netBird: NetBirdGuard
     private lateinit var netBirdStatus: TextView
+    private lateinit var peerStatus: TextView
     private val netBirdHandler = Handler(Looper.getMainLooper())
     private val netBirdCheckRunnable = object : Runnable {
         override fun run() {
@@ -92,6 +93,8 @@ class MainActivity : ComponentActivity() {
 
         netBirdStatus = TextView(this).apply { setPadding(0, 10, 0, 6); textSize = 16f }
         root.addView(netBirdStatus)
+        peerStatus = TextView(this).apply { setPadding(0, 2, 0, 8); textSize = 15f; text = "BLE 0   •   NetBird 0" }
+        root.addView(peerStatus)
         root.addView(Switch(this).apply {
             text = "Только внутренняя сеть"
             isChecked = netBird.onlyNetBird
@@ -432,6 +435,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val peerStatusReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != MeshForegroundService.ACTION_PEER_STATUS) return
+            val ble = intent.getIntExtra(MeshForegroundService.EXTRA_BLE_COUNT, 0)
+            val netBirdPeers = intent.getIntExtra(MeshForegroundService.EXTRA_NETBIRD_COUNT, 0)
+            peerStatus.text = "BLE $ble   •   NetBird $netBirdPeers"
+        }
+    }
+
     private val ipStatusReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != MeshForegroundService.ACTION_IP_STATUS) return
@@ -460,6 +472,7 @@ class MainActivity : ComponentActivity() {
             androidx.core.content.ContextCompat.registerReceiver(this, ipStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_IP_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             androidx.core.content.ContextCompat.registerReceiver(this, meshMessageReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_MESSAGE), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             androidx.core.content.ContextCompat.registerReceiver(this, meshStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+            androidx.core.content.ContextCompat.registerReceiver(this, peerStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_PEER_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
         } catch (t: Throwable) {
             android.util.Log.e("MeshMessenger", "onStart failure", t)
             android.app.AlertDialog.Builder(this)
@@ -475,6 +488,7 @@ class MainActivity : ComponentActivity() {
         runCatching { unregisterReceiver(ipStatusReceiver) }
         runCatching { unregisterReceiver(meshMessageReceiver) }
         runCatching { unregisterReceiver(meshStatusReceiver) }
+        runCatching { unregisterReceiver(peerStatusReceiver) }
         super.onStop()
     }
 

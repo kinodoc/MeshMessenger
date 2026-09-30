@@ -41,6 +41,9 @@ class MeshForegroundService : Service() {
         const val EXTRA_MESH_ACTIVE = "mesh_active"
         const val EXTRA_PACKET_ID = "packet_id"
         const val EXTRA_IP_SUCCESS = "ip_success"
+        const val ACTION_PEER_STATUS = "com.example.meshmessenger.PEER_STATUS"
+        const val EXTRA_BLE_COUNT = "ble_count"
+        const val EXTRA_NETBIRD_COUNT = "netbird_count"
 
         private const val RETRY_INTERVAL_MS = 5_000L
     }
@@ -50,6 +53,8 @@ class MeshForegroundService : Service() {
     private var ipTransport: MeshIpTransport? = null
     private var netBirdGuard: NetBirdGuard? = null
     private lateinit var pendingIp: PendingIpMessageStore
+    private var blePeerCount = 0
+    private var netBirdPeerCount = 0
 
     private val retryHandler = Handler(Looper.getMainLooper())
 
@@ -188,6 +193,10 @@ class MeshForegroundService : Service() {
                 { updateNotification(it) },
                 { text, sourceId ->
                     handleMeshMessage(text, sourceId)
+                },
+                { count ->
+                    blePeerCount = count
+                    sendPeerStatus()
                 }
             ).also {
                 it.start()
@@ -272,6 +281,9 @@ class MeshForegroundService : Service() {
         ipTransport = null
 
         netBirdGuard = null
+        blePeerCount = 0
+        netBirdPeerCount = 0
+        sendPeerStatus()
         sendMeshStatus(false)
     }
 
@@ -312,6 +324,15 @@ class MeshForegroundService : Service() {
             .setOngoing(true)
             .setContentIntent(open)
             .build()
+    }
+
+    private fun sendPeerStatus() {
+        val intent = Intent(ACTION_PEER_STATUS).apply {
+            setPackage(packageName)
+            putExtra(EXTRA_BLE_COUNT, blePeerCount)
+            putExtra(EXTRA_NETBIRD_COUNT, netBirdPeerCount)
+        }
+        sendBroadcast(intent)
     }
 
     private fun sendMeshStatus(active: Boolean) {
