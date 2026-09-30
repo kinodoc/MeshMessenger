@@ -2,6 +2,9 @@ package com.example.meshmessenger
 
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Environment
 import android.provider.Settings
@@ -13,6 +16,27 @@ import java.net.URL
 
 class UpdateManager(private val context: Context) {
     private var pendingFile: File? = null
+
+    /**
+     * Updates use a normal Internet network instead of the NetBird VPN.
+     * This keeps GitHub reachable when NetBird is configured for internal-only traffic.
+     */
+    private fun openHttpConnection(url: String): HttpURLConnection {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val candidates = cm.allNetworks.mapNotNull { network ->
+            val caps = cm.getNetworkCapabilities(network) ?: return@mapNotNull null
+            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+            ) return@mapNotNull null
+            network
+        }.sortedByDescending { network ->
+            cm.getNetworkCapabilities(network)
+                ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+        }
+
+        return (candidates.firstOrNull()?.openConnection(URL(url)) as? HttpURLConnection)
+            ?: (URL(url).openConnection() as HttpURLConnection)
+    }
 
     companion object {
         private const val RELEASES_URL = "https://api.github.com/repos/kinodoc/MeshMessenger/releases/latest"
@@ -31,7 +55,7 @@ class UpdateManager(private val context: Context) {
     }
 
     private fun fetchLatestFromApi(): ReleaseInfo? {
-        val connection = (URL(RELEASES_URL).openConnection() as HttpURLConnection).apply {
+        val connection = openHttpConnection(RELEASES_URL).apply {
             requestMethod = "GET"
             connectTimeout = 5000
             readTimeout = 5000
@@ -62,7 +86,7 @@ class UpdateManager(private val context: Context) {
     }
 
     private fun fetchLatestFromGitHubPage(): ReleaseInfo? {
-        val connection = (URL(RELEASE_PAGE_URL).openConnection() as HttpURLConnection).apply {
+        val connection = openHttpConnection(RELEASE_PAGE_URL).apply {
             requestMethod = "GET"
             connectTimeout = 5000
             readTimeout = 5000
@@ -99,7 +123,7 @@ class UpdateManager(private val context: Context) {
     fun downloadAndInstall(release: ReleaseInfo, onError: (Throwable) -> Unit) {
         Thread {
             runCatching {
-                val connection = (URL(release.apkUrl).openConnection() as HttpURLConnection).apply {
+                val connection = openHttpConnection(release.apkUrl).apply {
                     requestMethod = "GET"
                     connectTimeout = 10000
                     readTimeout = 30000
