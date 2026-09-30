@@ -618,7 +618,7 @@ class MainActivity : ComponentActivity() {
         })
         box.addView(TextView(this).apply {
             text = "Нажми на ключ ниже, чтобы скопировать его и передать в другое приложение:" + System.lineSeparator() + card
-            textIsSelectable = true
+            setTextIsSelectable(true)
             setPadding(0, 16, 0, 8)
             setOnClickListener {
                 val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
