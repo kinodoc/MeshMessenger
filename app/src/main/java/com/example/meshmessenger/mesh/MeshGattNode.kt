@@ -7,6 +7,7 @@ import android.bluetooth.le.*
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.ParcelUuid
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.util.Base64
@@ -36,6 +37,10 @@ class MeshGattNode(
     private val peers = mutableMapOf<String, BluetoothGatt>()
     private val serverClients = mutableMapOf<String, BluetoothDevice>()
     private val connecting = mutableSetOf<String>()
+    // BLE MAC addresses may rotate. Track the application's stable Node ID too,
+    // so one physical peer cannot create several GATT connections/counts.
+    private val connectingNodeIds = ConcurrentHashMap.newKeySet<String>()
+    private val peerNodeIds = ConcurrentHashMap<String, String>()
     private val notifyReady = mutableSetOf<String>()
     private val service = MeshProtocol.SERVICE_UUID
     private val rx = MeshProtocol.RX_UUID
@@ -101,6 +106,7 @@ class MeshGattNode(
                     serverClients[device.address] = device
                 } else {
                     serverClients.remove(device.address)
+                    peerNodeIds.remove(device.address)
                     notifyReady.remove(device.address)
                     assemblies.remove(device.address)
                     notificationQueues.remove(device.address)
@@ -145,12 +151,21 @@ class MeshGattNode(
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .setConnectable(true)
             .build()
+        // Publish the stable Mesh Node ID in service data. Android exposes the
+        // scan record service data independently from the BLE address, allowing
+        // scanners to deduplicate the same phone before opening GATT.
         val data = AdvertiseData.Builder()
             .setIncludeDeviceName(false)
-            .addServiceUuid(android.os.ParcelUuid(service))
+            .addServiceUuid(ParcelUuid(service))
+            .build()
+        // Keep the 128-bit service UUID in the primary advertisement and put the
+        // stable Node ID into the scan response. A connectable legacy BLE
+        // advertisement is limited to 31 bytes, so both cannot safely fit there.
+        val scanResponse = AdvertiseData.Builder()
+            .addServiceData(ParcelUuid(service), localId.toByteArray(StandardCharsets.UTF_8))
             .build()
 
-        adv.startAdvertising(settings, data, object : AdvertiseCallback() {
+        adv.startAdvertising(settings, data, scanResponse, object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
                 onStatus("Mesh активен • BLE relay готов")
             }
@@ -170,8 +185,14 @@ class MeshGattNode(
 
         scanCallback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
-                val uuids = result.scanRecord?.serviceUuids.orEmpty()
-                if (uuids.any { it.uuid == service }) connect(result.device)
+                val record = result.scanRecord ?: return
+                val uuids = record.serviceUuids.orEmpty()
+                if (!uuids.any { it.uuid == service }) return
+                val advertisedNodeId = record.getServiceData(ParcelUuid(service))
+                    ?.toString(StandardCharsets.UTF_8)
+                    ?.trim()
+                if (advertisedNodeId == localId) return
+                connect(result.device, advertisedNodeId?.takeIf { it.isNotBlank() })
             }
             override fun onScanFailed(errorCode: Int) {
                 onStatus("BLE scan error: " + errorCode)
@@ -181,9 +202,14 @@ class MeshGattNode(
     }
 
     @SuppressLint("MissingPermission")
-    fun connect(device: BluetoothDevice) {
+    fun connect(device: BluetoothDevice, advertisedNodeId: String? = null) {
         if (Build.VERSION.SDK_INT >= 31 && context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
-        if (device.address == adapter.address || peers.containsKey(device.address) || !connecting.add(device.address)) return
+        val stableId = advertisedNodeId?.trim().orEmpty()
+        if (device.address == adapter.address ||
+            peers.containsKey(device.address) ||
+            connecting.contains(device.address) ||
+            (stableId.isNotBlank() && (peerNodeIds.values.contains(stableId) || !connectingNodeIds.add(stableId)))) return
+        connecting.add(device.address)
         val callback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
@@ -194,6 +220,8 @@ class MeshGattNode(
                 } else {
                     peers.remove(device.address)
                     connecting.remove(device.address)
+                    if (stableId.isNotBlank()) connectingNodeIds.remove(stableId)
+                    peerNodeIds.remove(device.address)
                     notifyReady.remove(device.address)
                     assemblies.remove(device.address)
                     writeQueues.remove(device.address)
@@ -277,7 +305,13 @@ class MeshGattNode(
                 flushPeerQueue(address)
             }
         }
-        peers[device.address] = device.connectGatt(context, false, callback)
+        val gatt = runCatching { device.connectGatt(context, false, callback) }.getOrNull()
+        if (gatt == null) {
+            connecting.remove(device.address)
+            if (stableId.isNotBlank()) connectingNodeIds.remove(stableId)
+            return
+        }
+        peers[device.address] = gatt
         onPeerCountChanged(peerCount())
     }
 
@@ -320,9 +354,21 @@ class MeshGattNode(
         if (text.startsWith(HELLO_MAGIC + "|")) {
             val parts = text.split("|", limit = 4)
             if (parts.size == 4 && parts[1].isNotBlank()) {
+                val peerId = parts[1].trim()
+                if (peerId == localId) return
+                peerNodeIds[from] = peerId
+                val duplicateAddress = peerNodeIds.entries.firstOrNull { it.value == peerId && it.key != from }?.key
+                if (duplicateAddress != null) {
+                    // Same application identity reached us through a rotated BLE
+                    // address. Keep the first connection and close this duplicate.
+                    peers[from]?.let { runCatching { it.disconnect() }; runCatching { it.close() } }
+                    serverClients[from]?.let { runCatching { server?.cancelConnection(it) } }
+                    return
+                }
                 val key = runCatching { Base64.getDecoder().decode(parts[3]) }.getOrNull()
                 if (key != null && key.isNotEmpty()) {
-                    onPeer(parts[1], parts[2].ifBlank { parts[1].take(8) }, key)
+                    onPeer(peerId, parts[2].ifBlank { peerId.take(8) }, key)
+                    onPeerCountChanged(peerCount())
                 }
             }
             return
@@ -553,7 +599,7 @@ class MeshGattNode(
         }
     }
 
-    private fun peerCount(): Int = (peers.keys + serverClients.keys).distinct().size
+    private fun peerCount(): Int = peerNodeIds.values.distinct().size
 
     fun stop() {
         scanner?.let { sc -> scanCallback?.let { cb -> sc.stopScan(cb) } }
@@ -563,6 +609,9 @@ class MeshGattNode(
         peers.values.forEach { runCatching { it.close() } }
         peers.clear()
         serverClients.clear()
+        connecting.clear()
+        connectingNodeIds.clear()
+        peerNodeIds.clear()
         notifyReady.clear()
         notificationQueues.clear()
         notifying.clear()
