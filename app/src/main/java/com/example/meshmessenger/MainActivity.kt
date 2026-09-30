@@ -110,6 +110,7 @@ class MainActivity : ComponentActivity() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(16, 8, 16, 16) }
         root.addView(status)
         root.addView(TextView(this).apply { text = "Мой Node ID: ${identity.nodeId}" })
+        root.addView(TextView(this).apply { text = "Версия приложения: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"; setPadding(0, 4, 0, 4) })
 
         netBirdStatus = TextView(this).apply { setPadding(0, 10, 0, 6); textSize = 16f }
         root.addView(netBirdStatus)
