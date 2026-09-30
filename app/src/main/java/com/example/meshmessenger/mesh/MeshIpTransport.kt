@@ -1,5 +1,3 @@
-[Reading 176 lines from start (total: 176 lines, 0 remaining)]
-
 package com.example.meshmessenger.mesh
 
 import java.io.BufferedInputStream
