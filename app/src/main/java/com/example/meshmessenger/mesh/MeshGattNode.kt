@@ -363,6 +363,16 @@ class MeshGattNode(
         flushQueue()
     }
 
+    /**
+     * Re-attempts packets that are still waiting for a delivery acknowledgement.
+     * The durable queue is intentionally kept until the destination confirms receipt.
+     */
+    @SuppressLint("MissingPermission")
+    fun retryPending() {
+        if (peers.isEmpty() && serverClients.isEmpty()) return
+        flushQueue()
+    }
+
     @SuppressLint("MissingPermission")
     private fun flushQueue() {
         val ready = peers.filterKeys { notifyReady.contains(it) }.keys.toList()

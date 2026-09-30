@@ -51,6 +51,35 @@ class ChatStore(context: Context) {
         save(a)
     }
 
+    fun addIncomingIfAbsent(
+        peerId: String,
+        text: String,
+        packetId: String
+    ) = synchronized(lock) {
+        if (packetId.isBlank()) {
+            add(peerId, text, false)
+            return@synchronized
+        }
+
+        val a = load().toMutableList()
+        if (a.any { it.packetId == packetId }) return@synchronized
+
+        a.add(
+            Message(
+                id = UUID.randomUUID().toString(),
+                peerId = peerId,
+                text = text,
+                mine = false,
+                time = System.currentTimeMillis(),
+                delivery = Delivery.DELIVERED,
+                packetId = packetId
+            )
+        )
+
+        while (a.size > 2000) a.removeAt(0)
+        save(a)
+    }
+
     fun messages(peerId: String): List<Message> =
         synchronized(lock) {
             load().filter { it.peerId == peerId }

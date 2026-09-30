@@ -324,8 +324,8 @@ class MainActivity : ComponentActivity() {
         startService(Intent(this, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_START))
         status.text = "Mesh запускается..."
     }
-    private fun handleIncoming(text: String, sourceId: String) {
-        chats.add(sourceId, text, false)
+    private fun handleIncoming(text: String, sourceId: String, packetId: String = "") {
+        chats.addIncomingIfAbsent(sourceId, text, packetId)
         val contact = contacts.all().firstOrNull { it.nodeId == sourceId }
         log.text = if (contact != null) {
             "Получено от ${contact.name}: $text"
@@ -689,7 +689,18 @@ class MainActivity : ComponentActivity() {
             if (intent?.action != MeshForegroundService.ACTION_MESH_MESSAGE) return
             val text = intent.getStringExtra(MeshForegroundService.EXTRA_MESH_TEXT) ?: return
             val sourceId = intent.getStringExtra(MeshForegroundService.EXTRA_SOURCE_ID) ?: return
-            handleIncoming(text, sourceId)
+            val packetId = intent.getStringExtra(MeshForegroundService.EXTRA_PACKET_ID).orEmpty()
+            handleIncoming(text, sourceId, packetId)
+        }
+    }
+
+    private val ipMessageReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != MeshForegroundService.ACTION_IP_MESSAGE) return
+            val text = intent.getStringExtra(MeshForegroundService.EXTRA_TEXT) ?: return
+            val sourceId = intent.getStringExtra(MeshForegroundService.EXTRA_SOURCE_ID) ?: return
+            val packetId = intent.getStringExtra(MeshForegroundService.EXTRA_PACKET_ID).orEmpty()
+            handleIncoming(text, sourceId, packetId)
         }
     }
 
@@ -766,6 +777,7 @@ class MainActivity : ComponentActivity() {
             androidx.core.content.ContextCompat.registerReceiver(this, deliveryReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_DELIVERED), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             androidx.core.content.ContextCompat.registerReceiver(this, ipStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_IP_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             androidx.core.content.ContextCompat.registerReceiver(this, meshMessageReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_MESSAGE), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+            androidx.core.content.ContextCompat.registerReceiver(this, ipMessageReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_IP_MESSAGE), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             androidx.core.content.ContextCompat.registerReceiver(this, meshStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             androidx.core.content.ContextCompat.registerReceiver(this, peerStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_PEER_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             startService(Intent(this, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_MESH_STATUS_REQUEST))
@@ -785,6 +797,7 @@ class MainActivity : ComponentActivity() {
         runCatching { unregisterReceiver(deliveryReceiver) }
         runCatching { unregisterReceiver(ipStatusReceiver) }
         runCatching { unregisterReceiver(meshMessageReceiver) }
+        runCatching { unregisterReceiver(ipMessageReceiver) }
         runCatching { unregisterReceiver(meshStatusReceiver) }
         runCatching { unregisterReceiver(peerStatusReceiver) }
         super.onStop()

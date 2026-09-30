@@ -61,6 +61,7 @@ class MeshForegroundService : Service() {
     private var discovery: MeshDiscovery? = null
     private lateinit var pendingIp: PendingIpMessageStore
     private lateinit var contacts: ContactStore
+    private lateinit var chats: ChatStore
     private var blePeerCount = 0
     private var netBirdPeerCount = 0
 
@@ -69,6 +70,7 @@ class MeshForegroundService : Service() {
     private val retryRunnable = object : Runnable {
         override fun run() {
             retryPendingIp()
+            node?.retryPending()
             retryHandler.postDelayed(this, RETRY_INTERVAL_MS)
         }
     }
@@ -85,6 +87,7 @@ class MeshForegroundService : Service() {
 
         pendingIp = PendingIpMessageStore(this)
         contacts = ContactStore(this)
+        chats = ChatStore(this)
         retryHandler.post(retryRunnable)
     }
 
@@ -226,7 +229,7 @@ class MeshForegroundService : Service() {
                 onStatus = { updateNotification(it) },
                 onMessage = { text, sourceId, packet, remoteIp ->
                     rememberPeer(packet, remoteIp)
-                    handleIpMessage(text, sourceId)
+                    handleIncomingPersisted(text, sourceId, packet.messageId.toString(), ACTION_IP_MESSAGE)
                 },
                 onDeliveryAck = { packetId -> sendDeliveryStatus(packetId) }
             ).also {
@@ -255,7 +258,7 @@ class MeshForegroundService : Service() {
                     { updateNotification(it) },
                     { text, sourceId, packet ->
                         rememberPeer(packet)
-                        handleMeshMessage(text, sourceId)
+                        handleIncomingPersisted(text, sourceId, packet.messageId.toString(), ACTION_MESH_MESSAGE)
                     },
                     { nodeId, name, publicKey ->
                         val key = android.util.Base64.encodeToString(publicKey, android.util.Base64.NO_WRAP)
@@ -357,25 +360,30 @@ class MeshForegroundService : Service() {
         sendBroadcast(statusIntent)
     }
 
-    private fun handleMeshMessage(text: String, sourceId: String) {
-        val intent = Intent(ACTION_MESH_MESSAGE).apply {
-            setPackage(packageName)
-            putExtra(EXTRA_MESH_TEXT, text)
-            putExtra(EXTRA_SOURCE_ID, sourceId)
-        }
-        sendBroadcast(intent)
-    }
-
-    private fun handleIpMessage(
+    private fun handleIncomingPersisted(
         text: String,
-        sourceId: String
+        sourceId: String,
+        packetId: String?,
+        action: String
     ) {
-        val intent = Intent(ACTION_IP_MESSAGE).apply {
-            setPackage(packageName)
-            putExtra(EXTRA_TEXT, text)
-            putExtra(EXTRA_SOURCE_ID, sourceId)
-        }
+        chats.addIncomingIfAbsent(
+            sourceId,
+            text,
+            packetId.orEmpty()
+        )
 
+        val intent = Intent(action).apply {
+            setPackage(packageName)
+            if (action == ACTION_IP_MESSAGE) {
+                putExtra(EXTRA_TEXT, text)
+            } else {
+                putExtra(EXTRA_MESH_TEXT, text)
+            }
+            putExtra(EXTRA_SOURCE_ID, sourceId)
+            if (!packetId.isNullOrBlank()) {
+                putExtra(EXTRA_PACKET_ID, packetId)
+            }
+        }
         sendBroadcast(intent)
     }
 
