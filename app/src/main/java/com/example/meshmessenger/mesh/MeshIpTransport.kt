@@ -1,3 +1,5 @@
+[Reading 176 lines from start (total: 176 lines, 0 remaining)]
+
 package com.example.meshmessenger.mesh
 
 import java.io.BufferedInputStream
@@ -82,8 +84,11 @@ class MeshIpTransport(
             return false
         }
 
-        if (guard.status() != NetBirdGuard.Status.CONNECTED) {
-            onStatus("IP: NetBird не подключён")
+        // The UI may detect the NetBird interface by its 100.x address even when
+        // Android reports the VPN transport state differently. Use the actual
+        // local NetBird address as the authoritative signal for the IP path.
+        if (guard.localNetBirdIp().isNullOrBlank()) {
+            onStatus("IP: внутренняя сеть NetBird не подключена")
             return false
         }
 
@@ -174,3 +179,5 @@ class MeshIpTransport(
         }
     }
 }
+
+[executed on device: debian (c42d85b4-c6ea-4e8c-a150-b48bad8af3d6)]
