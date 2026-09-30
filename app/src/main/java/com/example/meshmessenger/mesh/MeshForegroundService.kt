@@ -179,50 +179,62 @@ class MeshForegroundService : Service() {
 
         netBirdGuard = NetBirdGuard(this)
 
-        ipTransport = MeshIpTransport(
-            localId = identity.nodeId,
-            router = router,
-            queue = queue,
-            guard = netBirdGuard!!,
-            onStatus = { updateNotification(it) },
-            onMessage = { text, sourceId, packet, remoteIp ->
-                rememberPeer(packet, remoteIp)
-                handleIpMessage(text, sourceId)
-            },
-            onDeliveryAck = { packetId -> sendDeliveryStatus(packetId) }
-        ).also {
-            it.start()
-        }
-
-        val adapter = (
-            getSystemService(Context.BLUETOOTH_SERVICE)
-                as BluetoothManager
-            ).adapter
-
-        if (adapter != null) {
-            node = MeshGattNode(
-                this,
-                adapter,
-                identity.nodeId,
-                router,
-                queue,
-                { updateNotification(it) },
-                { text, sourceId, packet ->
-                    rememberPeer(packet)
-                    handleMeshMessage(text, sourceId)
+        runCatching {
+            ipTransport = MeshIpTransport(
+                localId = identity.nodeId,
+                router = router,
+                queue = queue,
+                guard = netBirdGuard!!,
+                onStatus = { updateNotification(it) },
+                onMessage = { text, sourceId, packet, remoteIp ->
+                    rememberPeer(packet, remoteIp)
+                    handleIpMessage(text, sourceId)
                 },
-                { packetId -> sendDeliveryStatus(packetId) },
-                { count ->
-                    blePeerCount = count
-                    sendPeerStatus()
-                }
+                onDeliveryAck = { packetId -> sendDeliveryStatus(packetId) }
             ).also {
                 it.start()
             }
+        }.onFailure {
+            ipTransport = null
+            updateNotification("Внутренняя сеть: не удалось запустить транспорт")
+            android.util.Log.e("MeshMessenger", "IP transport start failed", it)
         }
 
-        updateNotification("BLE + внутренняя сеть работают")
-        sendMeshStatus(meshEnabled && (node != null || ipTransport != null))
+        val adapter = runCatching {
+            (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        }.getOrNull()
+
+        if (adapter != null) {
+            runCatching {
+                node = MeshGattNode(
+                    this,
+                    adapter,
+                    identity.nodeId,
+                    router,
+                    queue,
+                    { updateNotification(it) },
+                    { text, sourceId, packet ->
+                        rememberPeer(packet)
+                        handleMeshMessage(text, sourceId)
+                    },
+                    { packetId -> sendDeliveryStatus(packetId) },
+                    { count ->
+                        blePeerCount = count
+                        sendPeerStatus()
+                    }
+                ).also {
+                    it.start()
+                }
+            }.onFailure {
+                node = null
+                updateNotification("BLE: не удалось запустить mesh")
+                android.util.Log.e("MeshMessenger", "BLE mesh start failed", it)
+            }
+        }
+
+        val active = node != null || ipTransport != null
+        updateNotification(if (active) "Mesh работает" else "Mesh не удалось запустить")
+        sendMeshStatus(meshEnabled && active)
     }
 
     private fun retryPendingIp() {

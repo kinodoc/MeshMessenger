@@ -594,39 +594,49 @@ class MainActivity : ComponentActivity() {
             val text = input.text.toString().trim()
             if (text.isEmpty()) return@setOnClickListener
 
-            val public = CryptoManager.publicKeyFromBase64(contact.publicKeyBase64)
-            val packet = router.createEncryptedMessage(contact.nodeId, public, text, identity.displayName)
+            runCatching {
+                val public = CryptoManager.publicKeyFromBase64(contact.publicKeyBase64)
+                val packet = router.createEncryptedMessage(contact.nodeId, public, text, identity.displayName)
 
-            if (netBird.onlyNetBird) {
-                val ip = contact.netBirdIp.trim()
-                val connected = netBird.status() == NetBirdGuard.Status.CONNECTED || !netBird.localNetBirdIp().isNullOrBlank()
+                if (netBird.onlyNetBird) {
+                    val ip = contact.netBirdIp.trim()
+                    val connected = netBird.status() == NetBirdGuard.Status.CONNECTED || !netBird.localNetBirdIp().isNullOrBlank()
 
-                if (ip.isBlank()) {
-                    chats.add(contact.nodeId, text, true, ChatStore.Delivery.NOT_SENT, packet.messageId.toString())
-                    log.text = "⚠ Не отправлено: у контакта нет внутреннего IP"
-                } else {
-                    pendingIp.enqueue(packet, ip)
-                    chats.add(contact.nodeId, text, true, if (connected) ChatStore.Delivery.WAITING else ChatStore.Delivery.NOT_SENT, packet.messageId.toString())
-
-                    if (connected) {
-                        startService(Intent(this, MeshForegroundService::class.java).apply {
-                            action = MeshForegroundService.ACTION_SEND_IP
-                            putExtra(MeshForegroundService.EXTRA_IP, ip)
-                            putExtra(MeshForegroundService.EXTRA_PACKET, packet.encode())
-                        })
-                        log.text = "◷ Ожидает отправки через внутреннюю сеть"
+                    if (ip.isBlank()) {
+                        chats.add(contact.nodeId, text, true, ChatStore.Delivery.NOT_SENT, packet.messageId.toString())
+                        log.text = "⚠ Не отправлено: у контакта нет внутреннего IP"
                     } else {
-                        log.text = "⚠ Не отправлено: внутренняя сеть не подключена"
-                    }
-                }
-            } else {
-                startService(Intent(this, MeshForegroundService::class.java).apply { action = MeshForegroundService.ACTION_SEND_MESH; putExtra(MeshForegroundService.EXTRA_PACKET, packet.encode()) })
-                chats.add(contact.nodeId, text, true, ChatStore.Delivery.WAITING, packet.messageId.toString())
-                log.text = "◷ Ожидает подтверждения получателя"
-            }
+                        pendingIp.enqueue(packet, ip)
+                        chats.add(contact.nodeId, text, true, if (connected) ChatStore.Delivery.WAITING else ChatStore.Delivery.NOT_SENT, packet.messageId.toString())
 
-            input.text.clear()
-            refresh()
+                        if (connected) {
+                            startService(Intent(this, MeshForegroundService::class.java).apply {
+                                action = MeshForegroundService.ACTION_SEND_IP
+                                putExtra(MeshForegroundService.EXTRA_IP, ip)
+                                putExtra(MeshForegroundService.EXTRA_PACKET, packet.encode())
+                            })
+                            log.text = "◷ Ожидает отправки через внутреннюю сеть"
+                        } else {
+                            log.text = "⚠ Не отправлено: внутренняя сеть не подключена"
+                        }
+                    }
+                } else {
+                    startService(Intent(this, MeshForegroundService::class.java).apply {
+                        action = MeshForegroundService.ACTION_SEND_MESH
+                        putExtra(MeshForegroundService.EXTRA_PACKET, packet.encode())
+                    })
+                    chats.add(contact.nodeId, text, true, ChatStore.Delivery.WAITING, packet.messageId.toString())
+                    log.text = "◷ Ожидает подтверждения получателя"
+                }
+
+                input.text.clear()
+                refresh()
+            }.onFailure { error ->
+                android.util.Log.e("MeshMessenger", "Message send failed", error)
+                chats.add(contact.nodeId, text, true, ChatStore.Delivery.NOT_SENT)
+                log.text = "⚠ Не удалось отправить сообщение. Проверь контакт и подключение."
+                refresh()
+            }
         }
 
         root.addView(header)
