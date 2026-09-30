@@ -147,6 +147,43 @@ class NetBirdGuard(private val context: Context) {
         }
     }
 
+    /**
+     * Returns IPv4 destinations actually routed through the NetBird VPN.
+     * NetBird commonly installs host routes (/32) for peers, so LAN broadcast
+     * discovery cannot see them.
+     */
+    fun netBirdDiscoveryTargets(): List<java.net.InetAddress> {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = netBirdNetwork() ?: return emptyList()
+        val result = linkedSetOf<java.net.InetAddress>()
+        val local = localNetBirdIp()
+
+        runCatching {
+            cm.getLinkProperties(network)?.routes.orEmpty().forEach { route ->
+                val ipv4 = route.destination.address as? Inet4Address ?: return@forEach
+                val prefix = route.destination.prefixLength
+                if (!isNetBirdAddress(ipv4) || ipv4.hostAddress == local) return@forEach
+                when {
+                    prefix == 32 -> result.add(ipv4)
+                    prefix in 24..30 -> {
+                        val base = java.nio.ByteBuffer.wrap(ipv4.address).int
+                        val hostBits = 32 - prefix
+                        val hostCount = 1 shl hostBits
+                        val mask = -1 shl hostBits
+                        val networkBase = base and mask
+                        for (host in 1 until hostCount - 1) {
+                            val target = java.net.InetAddress.getByAddress(
+                                java.nio.ByteBuffer.allocate(4).putInt(networkBase or host).array()
+                            )
+                            if (target.hostAddress != local) result.add(target)
+                        }
+                    }
+                }
+            }
+        }
+        return result.toList()
+    }
+
     fun isNetBirdAddress(address: java.net.InetAddress): Boolean {
         val ipv4 = address as? java.net.Inet4Address ?: return false
         return isNetBirdAddress(ipv4.address)

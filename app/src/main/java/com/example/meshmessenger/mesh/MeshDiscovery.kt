@@ -1,5 +1,6 @@
 package com.example.meshmessenger.mesh
 
+import android.net.Network
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.Inet4Address
@@ -16,11 +17,13 @@ class MeshDiscovery(
     private val publicKey: ByteArray,
     private val onPeer: (nodeId: String, name: String, publicKey: ByteArray, ip: String) -> Unit,
     private val onCount: (Int) -> Unit,
-    private val onStatus: (String) -> Unit
+    private val onStatus: (String) -> Unit,
+    private val netBirdNetwork: () -> Network? = { null },
+    private val netBirdTargets: () -> List<InetAddress> = { emptyList() }
 ) {
     companion object {
         const val PORT = 42425
-        private const val MAGIC = "MESH_DISCOVERY_V1"
+        private const val MAGIC = "MESH_DISCOVERY_V2"
         private const val MULTICAST = "239.255.42.99"
         private const val ANNOUNCE_MS = 5000L
         private const val PROBE_MS = 15000L
@@ -29,26 +32,12 @@ class MeshDiscovery(
     private val running = AtomicBoolean(false)
     private val executor = Executors.newCachedThreadPool()
     private val peers = java.util.concurrent.ConcurrentHashMap<String, Long>()
-    private var socket: DatagramSocket? = null
+    private val netBirdPeers = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val sockets = java.util.Collections.synchronizedSet(mutableSetOf<DatagramSocket>())
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
-        executor.execute {
-            runCatching {
-                DatagramSocket(PORT).also { socket = it }.use { s ->
-                    s.broadcast = true
-                    onStatus("IP discovery готов")
-                    val buffer = ByteArray(4096)
-                    while (running.get()) {
-                        val packet = DatagramPacket(buffer, buffer.size)
-                        s.receive(packet)
-                        handle(packet)
-                    }
-                }
-            }.onFailure {
-                if (running.get()) onStatus("IP discovery: ${it.message ?: "ошибка"}")
-            }
-        }
+        startReceiver(null)
         executor.execute {
             while (running.get()) {
                 announce()
@@ -61,13 +50,46 @@ class MeshDiscovery(
                 Thread.sleep(PROBE_MS)
             }
         }
+        executor.execute {
+            while (running.get()) {
+                probeNetBird()
+                Thread.sleep(PROBE_MS)
+            }
+        }
+    }
+
+    private fun startReceiver(network: Network?) {
+        executor.execute {
+            runCatching {
+                DatagramSocket(null).use { s ->
+                    s.reuseAddress = true
+                    s.bind(java.net.InetSocketAddress(PORT))
+                    network?.bindSocket(s)
+                    sockets.add(s)
+                    onStatus(if (network == null) "IP discovery LAN готов" else "NetBird discovery готов")
+                    val buffer = ByteArray(4096)
+                    while (running.get()) {
+                        val packet = DatagramPacket(buffer, buffer.size)
+                        s.receive(packet)
+                        handle(packet, s)
+                    }
+                    sockets.remove(s)
+                }
+            }.onFailure {
+                if (running.get()) {
+                    val prefix = if (network == null) "IP discovery LAN: " else "NetBird discovery: "
+                    onStatus(prefix + (it.message ?: "ошибка"))
+                }
+            }
+        }
     }
 
     fun stop() {
         running.set(false)
-        runCatching { socket?.close() }
-        socket = null
+        sockets.toList().forEach { runCatching { it.close() } }
+        sockets.clear()
         peers.clear()
+        netBirdPeers.clear()
         onCount(0)
     }
 
@@ -92,7 +114,20 @@ class MeshDiscovery(
                 }
             }
         }
-        for (target in targets) send(bytes, target)
+        for (target in targets) send(bytes, target, null)
+    }
+
+    private fun probeNetBird() {
+        val targets = linkedSetOf<InetAddress>()
+        targets.addAll(netBirdTargets())
+        if (targets.isEmpty()) return
+        val bytes = payload()
+        val network = netBirdNetwork() ?: return
+        for (target in targets) {
+            if (target is Inet4Address && isNetBirdAddress(target)) {
+                send(bytes, target, network)
+            }
+        }
     }
 
     private fun probeRoutedSubnets() {
@@ -115,23 +150,26 @@ class MeshDiscovery(
                         val target = InetAddress.getByAddress(
                             ByteBuffer.allocate(4).putInt(network or n).array()
                         )
-                        if (target.hostAddress != address.hostAddress) send(payload(), target)
+                        if (target.hostAddress != address.hostAddress) {
+                            send(payload(), target, null)
+                        }
                     }
                 }
             }
         }
     }
 
-    private fun send(bytes: ByteArray, target: InetAddress) {
+    private fun send(bytes: ByteArray, target: InetAddress, network: Network?) {
         runCatching {
             DatagramSocket().use { s ->
                 s.broadcast = true
+                network?.bindSocket(s)
                 s.send(DatagramPacket(bytes, bytes.size, target, PORT))
             }
         }
     }
 
-    private fun handle(packet: DatagramPacket) {
+    private fun handle(packet: DatagramPacket, replySocket: DatagramSocket) {
         val text = String(packet.data, packet.offset, packet.length, Charsets.UTF_8)
         val parts = text.split("|", limit = 4)
         if (parts.size != 4 || parts[0] != MAGIC) return
@@ -140,14 +178,21 @@ class MeshDiscovery(
         val name = parts[2].trim().ifBlank { id.take(8) }
         val key = runCatching { Base64.getDecoder().decode(parts[3]) }.getOrNull() ?: return
         if (key.isEmpty()) return
-        peers[id] = System.currentTimeMillis()
+        val viaNetBird = packet.address is Inet4Address && isNetBirdAddress(packet.address as Inet4Address)
+        val now = System.currentTimeMillis()
+        peers[id] = now
+        if (viaNetBird) netBirdPeers[id] = now
         purgePeers()
-        onCount(peers.size)
+        onCount(netBirdPeers.size)
         onPeer(id, name, key, packet.address.hostAddress.orEmpty())
-        val reply = payload()
         runCatching {
-            DatagramSocket().use { s ->
-                s.send(DatagramPacket(reply, reply.size, packet.address, PORT))
+            val reply = payload()
+            if (viaNetBird) {
+                netBirdNetwork()?.let { network ->
+                    send(reply, packet.address, network)
+                }
+            } else {
+                replySocket.send(DatagramPacket(reply, reply.size, packet.address, packet.port))
             }
         }
     }
@@ -155,6 +200,15 @@ class MeshDiscovery(
     private fun purgePeers() {
         val cutoff = System.currentTimeMillis() - ANNOUNCE_MS * 3
         peers.entries.removeIf { it.value < cutoff }
-        onCount(peers.size)
+        netBirdPeers.entries.removeIf { it.value < cutoff }
+        onCount(netBirdPeers.size)
+    }
+
+    private fun isNetBirdAddress(address: Inet4Address): Boolean {
+        val bytes = address.address
+        if (bytes.size != 4) return false
+        val a = bytes[0].toInt() and 0xff
+        val b = bytes[1].toInt() and 0xff
+        return a == 100 && b in 64..127
     }
 }

@@ -52,6 +52,8 @@ class MeshForegroundService : Service() {
         const val EXTRA_DELIVERED_PACKET_ID = "delivered_packet_id"
 
         private const val RETRY_INTERVAL_MS = 5_000L
+        private const val PREFS = "mesh_runtime"
+        private const val KEY_ENABLED = "mesh_enabled"
     }
 
     private var node: MeshGattNode? = null
@@ -89,6 +91,8 @@ class MeshForegroundService : Service() {
         contacts = ContactStore(this)
         chats = ChatStore(this)
         retryHandler.post(retryRunnable)
+        meshEnabled = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_ENABLED, true)
+        if (meshEnabled) startMesh()
     }
 
     override fun onStartCommand(
@@ -100,7 +104,8 @@ class MeshForegroundService : Service() {
 
             ACTION_APP_START -> {
                 updateNotification("Mesh Messenger работает")
-                sendMeshStatus(meshEnabled && (node != null || ipTransport != null))
+                if (meshEnabled && node == null && ipTransport == null) startMesh()
+                else sendMeshStatus(meshEnabled && (node != null || ipTransport != null))
             }
 
             ACTION_MESH_STATUS_REQUEST -> {
@@ -109,11 +114,13 @@ class MeshForegroundService : Service() {
 
             ACTION_START -> {
                 meshEnabled = true
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, true).apply()
                 startMesh()
             }
 
             ACTION_STOP -> {
                 meshEnabled = false
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, false).apply()
                 stopMesh()
                 updateNotification("Mesh Messenger работает")
             }
@@ -213,7 +220,18 @@ class MeshForegroundService : Service() {
                     netBirdPeerCount = count
                     sendPeerStatus()
                 },
-                onStatus = { updateNotification(it) }
+                onStatus = { updateNotification(it) },
+                netBirdNetwork = { netBirdGuard?.netBirdNetwork() },
+                netBirdTargets = {
+                    val stored = contacts.all().mapNotNull { contact ->
+                        contact.netBirdIp.trim().takeIf { it.isNotBlank() }?.let {
+                            runCatching { InetAddress.getByName(it) }.getOrNull()
+                        }
+                    }
+                    (stored + netBirdGuard?.netBirdDiscoveryTargets().orEmpty())
+                        .filter { it is java.net.Inet4Address }
+                        .distinctBy { it.hostAddress }
+                }
             ).also { it.start() }
         }.onFailure {
             discovery = null

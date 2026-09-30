@@ -72,6 +72,14 @@ class MeshGattNode(
     fun start() {
         if (Build.VERSION.SDK_INT >= 31 && context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
         server = manager.openGattServer(context, object : BluetoothGattServerCallback() {
+            override fun onServiceAdded(status: Int, service: BluetoothGattService) {
+                if (service.uuid == this@MeshGattNode.service && status == BluetoothGatt.GATT_SUCCESS) {
+                    startBleAdvertisingAndScan()
+                } else if (service.uuid == this@MeshGattNode.service) {
+                    onStatus("BLE: сервис GATT не запущен: " + status)
+                }
+            }
+
             override fun onCharacteristicWriteRequest(device: BluetoothDevice, requestId: Int, characteristic: BluetoothGattCharacteristic, preparedWrite: Boolean, responseNeeded: Boolean, offset: Int, value: ByteArray) {
                 if (characteristic.uuid == rx) handleIncomingFragment(device.address, value)
                 if (responseNeeded) server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
@@ -93,6 +101,7 @@ class MeshGattNode(
                     notificationQueues.remove(device.address)
                     notifying.remove(device.address)
                 }
+                onPeerCountChanged(peerCount())
             }
 
             override fun onNotificationSent(device: BluetoothDevice, status: Int) {
@@ -116,13 +125,30 @@ class MeshGattNode(
         gattService.addCharacteristic(txCharacteristic)
         server?.addService(gattService)
 
+        // Advertising starts from onServiceAdded() so clients never discover an incomplete GATT server.
+    @SuppressLint("MissingPermission")
+    private fun startBleAdvertisingAndScan() {
+        if (advertiser != null || scanner != null) return
+
         advertiser = adapter.bluetoothLeAdvertiser
         val adv = advertiser ?: run { onStatus("BLE advertising недоступен"); return }
-        val settings = AdvertiseSettings.Builder().setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY).setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH).setConnectable(true).build()
-        val data = AdvertiseData.Builder().setIncludeDeviceName(false).addServiceUuid(android.os.ParcelUuid(service)).build()
+        val settings = AdvertiseSettings.Builder()
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+            .setConnectable(true)
+            .build()
+        val data = AdvertiseData.Builder()
+            .setIncludeDeviceName(false)
+            .addServiceUuid(android.os.ParcelUuid(service))
+            .build()
+
         adv.startAdvertising(settings, data, object : AdvertiseCallback() {
-            override fun onStartSuccess(settingsInEffect: AdvertiseSettings) { onStatus("Mesh активен • BLE relay готов") }
-            override fun onStartFailure(errorCode: Int) { onStatus("BLE advertising error: $errorCode") }
+            override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
+                onStatus("Mesh активен • BLE relay готов")
+            }
+            override fun onStartFailure(errorCode: Int) {
+                onStatus("BLE advertising error: " + errorCode)
+            }
         })
 
         scanner = adapter.bluetoothLeScanner
@@ -130,7 +156,6 @@ class MeshGattNode(
             onStatus("BLE scan недоступен")
             return
         }
-
         val scanSettings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
@@ -141,14 +166,10 @@ class MeshGattNode(
                 if (uuids.any { it.uuid == service }) connect(result.device)
             }
             override fun onScanFailed(errorCode: Int) {
-                onStatus("BLE scan error: $errorCode")
+                onStatus("BLE scan error: " + errorCode)
             }
         }
-        bleScanner.startScan(
-            null,
-            scanSettings,
-            scanCallback
-        )
+        bleScanner.startScan(null, scanSettings, scanCallback)
     }
 
     @SuppressLint("MissingPermission")
@@ -159,7 +180,7 @@ class MeshGattNode(
             override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     peers[device.address] = g
-                    onPeerCountChanged(peers.size)
+                    onPeerCountChanged(peerCount())
                     g.requestMtu(247)
                     g.discoverServices()
                 } else {
@@ -172,7 +193,7 @@ class MeshGattNode(
                     helloWriting.remove(device.address)
                     notificationQueues.remove(device.address)
                     notifying.remove(device.address)
-                    onPeerCountChanged(peers.size)
+                    onPeerCountChanged(peerCount())
                     g.close()
                 }
             }
@@ -195,8 +216,8 @@ class MeshGattNode(
                     flushQueue()
                 }
             }
-            override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-                if (characteristic.uuid == tx) handleIncomingFragment(device.address, characteristic.value)
+            override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
+                if (characteristic.uuid == tx) handleIncomingFragment(device.address, value)
             }
             override fun onCharacteristicWrite(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
                 if (characteristic.uuid != rx) return
@@ -229,7 +250,7 @@ class MeshGattNode(
             }
         }
         peers[device.address] = device.connectGatt(context, false, callback)
-        onPeerCountChanged(peers.size)
+        onPeerCountChanged(peerCount())
     }
 
     @SuppressLint("MissingPermission")
@@ -242,9 +263,18 @@ class MeshGattNode(
         ).joinToString("|").toByteArray(StandardCharsets.UTF_8)
         characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         helloWriting.add(gatt.device.address)
-        if (!runCatching { gatt.writeCharacteristic(characteristic) }.getOrDefault(false)) {
-            helloWriting.remove(gatt.device.address)
-        }
+        val started = runCatching {
+            if (Build.VERSION.SDK_INT >= 33) {
+                gatt.writeCharacteristic(
+                    characteristic,
+                    characteristic.value.copyOf(),
+                    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                ) == BluetoothStatusCodes.SUCCESS
+            } else {
+                gatt.writeCharacteristic(characteristic)
+            }
+        }.getOrDefault(false)
+        if (!started) helloWriting.remove(gatt.device.address)
     }
 
     @SuppressLint("MissingPermission")
@@ -375,9 +405,26 @@ class MeshGattNode(
 
     @SuppressLint("MissingPermission")
     private fun flushQueue() {
+        val entries = queue.snapshot()
+
+        // A peer may exist only on the GATT-server side. The previous code
+        // tracked those clients but never sent the durable outgoing queue to them.
+        val serverOnly = serverClients.keys.filter {
+            !peers.containsKey(it) && notifyReady.contains(it)
+        }
+
+        for (address in serverOnly) {
+            val device = serverClients[address] ?: continue
+            if (notificationQueues[address]?.isNotEmpty() == true) continue
+            for (entry in entries) {
+                val fragments = runCatching { fragment(entry.bytes) }.getOrNull() ?: continue
+                fragments.forEach { enqueueNotification(device, it) }
+            }
+        }
+
         val ready = peers.filterKeys { notifyReady.contains(it) }.keys.toList()
         for (address in ready) {
-            for (entry in queue.snapshot()) {
+            for (entry in entries) {
                 val fragments = runCatching { fragment(entry.bytes) }.getOrNull() ?: continue
                 val q = writeQueues.getOrPut(address) { ArrayDeque() }
                 if (q.none { it.messageId == entry.id }) {
@@ -399,7 +446,18 @@ class MeshGattNode(
         characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         characteristic.value = part
         writing.add(address)
-        if (!runCatching { gatt.writeCharacteristic(characteristic) }.getOrDefault(false)) {
+        val started = runCatching {
+            if (Build.VERSION.SDK_INT >= 33) {
+                gatt.writeCharacteristic(
+                    characteristic,
+                    part.copyOf(),
+                    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                ) == BluetoothStatusCodes.SUCCESS
+            } else {
+                gatt.writeCharacteristic(characteristic)
+            }
+        }.getOrDefault(false)
+        if (!started) {
             writing.remove(address)
             onStatus("BLE: запись занята")
         }
@@ -450,6 +508,8 @@ class MeshGattNode(
             for (part in fragments) enqueueNotification(device, part)
         }
     }
+
+    private fun peerCount(): Int = (peers.keys + serverClients.keys).distinct().size
 
     fun stop() {
         scanner?.let { sc -> scanCallback?.let { cb -> sc.stopScan(cb) } }
