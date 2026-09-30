@@ -34,6 +34,7 @@ class MeshGattNode(
     private var scanner: BluetoothLeScanner? = null
     private var scanCallback: ScanCallback? = null
     private val peers = mutableMapOf<String, BluetoothGatt>()
+    private val serverClients = mutableMapOf<String, BluetoothDevice>()
     private val connecting = mutableSetOf<String>()
     private val notifyReady = mutableSetOf<String>()
     private val service = MeshProtocol.SERVICE_UUID
@@ -64,6 +65,8 @@ class MeshGattNode(
     private val writeQueues = mutableMapOf<String, ArrayDeque<WriteTask>>()
     private val writing = mutableSetOf<String>()
     private val helloWriting = mutableSetOf<String>()
+    private val notificationQueues = mutableMapOf<String, ArrayDeque<ByteArray>>()
+    private val notifying = mutableSetOf<String>()
 
     @SuppressLint("MissingPermission")
     fun start() {
@@ -81,10 +84,30 @@ class MeshGattNode(
                 if (responseNeeded) server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
             }
             override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
-                if (newState != BluetoothProfile.STATE_CONNECTED) {
+                if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    serverClients[device.address] = device
+                } else {
+                    serverClients.remove(device.address)
                     notifyReady.remove(device.address)
                     assemblies.remove(device.address)
+                    notificationQueues.remove(device.address)
+                    notifying.remove(device.address)
                 }
+            }
+
+            override fun onNotificationSent(device: BluetoothDevice, status: Int) {
+                val address = device.address
+                notifying.remove(address)
+                val q = notificationQueues[address]
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    q?.removeFirstOrNull()
+                } else {
+                    onStatus("BLE: ошибка уведомления $status")
+                    // Drop only the failed fragment; the next queued fragment can still proceed.
+                    q?.removeFirstOrNull()
+                }
+                if (q?.isEmpty() == true) notificationQueues.remove(address)
+                flushNotificationQueue(address)
             }
         })
         val gattService = BluetoothGattService(service, BluetoothGattService.SERVICE_TYPE_PRIMARY)
@@ -147,6 +170,8 @@ class MeshGattNode(
                     writeQueues.remove(device.address)
                     writing.remove(device.address)
                     helloWriting.remove(device.address)
+                    notificationQueues.remove(device.address)
+                    notifying.remove(device.address)
                     onPeerCountChanged(peers.size)
                     g.close()
                 }
@@ -229,10 +254,7 @@ class MeshGattNode(
         val bytes = listOf(
             HELLO_MAGIC, localId, localName.take(64), key
         ).joinToString("|").toByteArray(StandardCharsets.UTF_8)
-        val characteristic = txCharacteristic.apply { value = bytes }
-        runCatching {
-            server?.notifyCharacteristicChanged(device, characteristic, false)
-        }
+        enqueueNotification(device, bytes)
     }
 
     private fun handleIncomingFragment(from: String, bytes: ByteArray) {
@@ -374,14 +396,48 @@ class MeshGattNode(
     }
 
     @SuppressLint("MissingPermission")
+    private fun enqueueNotification(device: BluetoothDevice, bytes: ByteArray) {
+        val address = device.address
+        if (!notifyReady.contains(address)) return
+        notificationQueues.getOrPut(address) { ArrayDeque() }.addLast(bytes.copyOf())
+        flushNotificationQueue(address)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun flushNotificationQueue(address: String) {
+        if (notifying.contains(address) || !notifyReady.contains(address)) return
+        val device = peers[address]?.device ?: serverClients[address] ?: return
+        val bytes = notificationQueues[address]?.firstOrNull() ?: return
+        val srv = server ?: return
+        val characteristic = txCharacteristic
+
+        val started = runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                srv.notifyCharacteristicChanged(device, characteristic, false, bytes) == android.bluetooth.BluetoothStatusCodes.SUCCESS
+            } else {
+                characteristic.value = bytes
+                srv.notifyCharacteristicChanged(device, characteristic, false)
+            }
+        }.getOrDefault(false)
+
+        if (started) {
+            notifying.add(address)
+        } else {
+            onStatus("BLE: уведомление не запущено")
+            notificationQueues[address]?.removeFirstOrNull()
+            if (notificationQueues[address]?.isEmpty() == true) notificationQueues.remove(address)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
     private fun broadcast(bytes: ByteArray, except: String? = null) {
         val fragments = runCatching { fragment(bytes) }.getOrNull() ?: return
-        for ((address, gatt) in peers.toMap()) {
+        val devices = LinkedHashMap<String, BluetoothDevice>()
+        for ((address, gatt) in peers.toMap()) devices[address] = gatt.device
+        for ((address, device) in serverClients.toMap()) devices[address] = device
+        for ((address, device) in devices) {
             if (address == except || !notifyReady.contains(address)) continue
-            for (part in fragments) {
-                val characteristic = txCharacteristic.apply { value = part }
-                runCatching { server?.notifyCharacteristicChanged(gatt.device, characteristic, false) }
-            }
+            for (part in fragments) enqueueNotification(device, part)
         }
     }
 
@@ -392,7 +448,10 @@ class MeshGattNode(
         advertiser?.stopAdvertising(object : AdvertiseCallback() {})
         peers.values.forEach { runCatching { it.close() } }
         peers.clear()
+        serverClients.clear()
         notifyReady.clear()
+        notificationQueues.clear()
+        notifying.clear()
         assemblies.clear()
         onPeerCountChanged(0)
         server?.close()

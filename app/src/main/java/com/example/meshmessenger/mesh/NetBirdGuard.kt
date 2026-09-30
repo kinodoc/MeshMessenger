@@ -125,15 +125,26 @@ class NetBirdGuard(private val context: Context) {
 
     fun netBirdNetwork(): Network? {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        return cm.allNetworks
-            .mapNotNull { network ->
-                val caps = cm.getNetworkCapabilities(network) ?: return@mapNotNull null
-                if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return@mapNotNull null
-                val hasNetBirdIp = cm.getLinkProperties(network)?.linkAddresses
-                    ?.any { isNetBirdAddress(it.address) } == true
-                if (hasNetBirdIp) network else null
-            }
-            .firstOrNull()
+        val vpnNetworks = cm.allNetworks.filter { network ->
+            cm.getNetworkCapabilities(network)
+                ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        }
+
+        // Prefer a VPN network whose LinkProperties explicitly exposes the
+        // NetBird 100.64/10 address. Some Android VPN implementations do not
+        // mirror the tunnel address into LinkProperties, so keep a fallback
+        // when there is exactly one VPN and the OS network interfaces show a
+        // NetBird address.
+        vpnNetworks.firstOrNull { network ->
+            cm.getLinkProperties(network)?.linkAddresses
+                ?.any { isNetBirdAddress(it.address) } == true
+        }?.let { return it }
+
+        return if (vpnNetworks.size == 1 && localNetBirdIp() != null) {
+            vpnNetworks.first()
+        } else {
+            null
+        }
     }
 
     fun isNetBirdAddress(address: java.net.InetAddress): Boolean {

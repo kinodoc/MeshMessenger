@@ -17,6 +17,7 @@ import android.util.Base64
 import androidx.core.app.NotificationCompat
 import com.example.meshmessenger.MainActivity
 import com.example.meshmessenger.R
+import java.net.InetAddress
 
 /** Keeps the mesh transports alive while the UI is not visible. */
 class MeshForegroundService : Service() {
@@ -188,12 +189,19 @@ class MeshForegroundService : Service() {
                 onPeer = { nodeId, name, publicKey, ip ->
                     val key = android.util.Base64.encodeToString(publicKey, android.util.Base64.NO_WRAP)
                     val current = contacts.get(nodeId)
+                    // Discovery may arrive over Wi-Fi/LAN. Never overwrite a known
+                    // NetBird address with a LAN address such as 192.168.x.x.
+                    val discoveredNetBirdIp = ip.takeIf { candidate ->
+                        runCatching {
+                            netBirdGuard?.isNetBirdAddress(InetAddress.getByName(candidate)) == true
+                        }.getOrDefault(false)
+                    }
                     contacts.upsert(
                         ContactStore.Contact(
                             nodeId = nodeId,
                             name = name.trim().ifBlank { nodeId.take(8) },
                             publicKeyBase64 = key,
-                            netBirdIp = ip.ifBlank { current?.netBirdIp.orEmpty() },
+                            netBirdIp = discoveredNetBirdIp ?: current?.netBirdIp.orEmpty(),
                             lastSeenAt = System.currentTimeMillis()
                         )
                     )
