@@ -130,7 +130,10 @@ class MainActivity : ComponentActivity() {
                     else -> showUpdateDialog(release)
                 }
             }.onFailure { error ->
-                if (manual) log.text = "Не удалось проверить обновление: ${error.message ?: error.javaClass.simpleName}"
+                if (manual) {
+                    val cause = error.cause?.let { "\nПричина: ${it.javaClass.simpleName}: ${it.message}" }.orEmpty()
+                    log.text = "Не удалось проверить обновление: ${error.javaClass.simpleName}: ${error.message ?: "без сообщения"}$cause"
+                }
             }
         }
     }
