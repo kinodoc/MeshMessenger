@@ -41,9 +41,19 @@ jobs:
           find "$HOME/.gradle/wrapper/dists" -type f -path "*/bin/gradle" -exec chmod +x {} +
           ./gradlew --no-daemon :app:assembleDebug
 
+      - name: Read app version
+        id: version
+        run: |
+          VERSION_NAME=$(grep -m1 'versionName' app/build.gradle.kts | sed -E 's/.*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
+          VERSION_CODE=$(grep -m1 'versionCode' app/build.gradle.kts | sed -E 's/.*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/')
+          echo "Building MeshMessenger v$VERSION_NAME ($VERSION_CODE)"
+          APK=$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n1)
+          test -n "$APK"
+          cp "$APK" "app/build/outputs/apk/debug/MeshMessenger-v$VERSION_NAME.apk"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: MeshMessenger-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: MeshMessenger-versioned-apk
+          path: app/build/outputs/apk/debug/MeshMessenger-v*.apk
           if-no-files-found: error
