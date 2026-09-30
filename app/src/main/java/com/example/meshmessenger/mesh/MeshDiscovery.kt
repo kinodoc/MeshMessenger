@@ -26,7 +26,10 @@ class MeshDiscovery(
         private const val MAGIC = "MESH_DISCOVERY_V2"
         private const val MULTICAST = "239.255.42.99"
         private const val ANNOUNCE_MS = 5000L
-        private const val PROBE_MS = 15000L
+        // NetBird peers must be refreshed faster than their expiry window.
+        // The old 15s/15s pair could expire a peer just before the next probe.
+        private const val PROBE_MS = 5000L
+        private const val PEER_TTL_MS = 30000L
     }
 
     private val running = AtomicBoolean(false)
@@ -198,7 +201,7 @@ class MeshDiscovery(
     }
 
     private fun purgePeers() {
-        val cutoff = System.currentTimeMillis() - ANNOUNCE_MS * 3
+        val cutoff = System.currentTimeMillis() - PEER_TTL_MS
         peers.entries.removeIf { it.value < cutoff }
         netBirdPeers.entries.removeIf { it.value < cutoff }
         onCount(netBirdPeers.size)
