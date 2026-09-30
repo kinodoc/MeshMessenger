@@ -69,8 +69,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-        if (result.values.all { it }) startMeshIfAllowed()
-        else {
+        if (result.values.all { it }) {
+            startRuntimeNotification()
+            startMeshIfAllowed()
+        } else {
             status.text = "Не все разрешения предоставлены"
             log.text = "Для mesh нужны Bluetooth и, на Android 11 и ниже, доступ к геопозиции для BLE-сканирования."
         }
@@ -99,6 +101,7 @@ class MainActivity : ComponentActivity() {
         buildHome()
         requestNotificationPermission()
         requestBluetoothPermissionsIfNeeded()
+        if (hasBluetoothRuntimePermissions()) startRuntimeNotification()
         // Старт не ждёт сеть: первая автопроверка через час, затем раз в час.
         updateNetBirdStatus()
         updateHandler.postDelayed(hourlyUpdateCheck, 60L * 60L * 1000L)
@@ -116,6 +119,19 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         updateHandler.removeCallbacks(hourlyUpdateCheck)
         super.onDestroy()
+    }
+
+    private fun startRuntimeNotification() {
+        runCatching {
+            val intent = Intent(this, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_APP_START)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                androidx.core.content.ContextCompat.startForegroundService(this, intent)
+            } else {
+                startService(intent)
+            }
+        }.onFailure {
+            android.util.Log.e("MeshMessenger", "Unable to start runtime notification", it)
+        }
     }
 
     private fun buildHome() {
@@ -233,6 +249,22 @@ class MainActivity : ComponentActivity() {
             androidx.core.content.ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    private fun hasBluetoothRuntimePermissions(): Boolean {
+        return if (android.os.Build.VERSION.SDK_INT >= 31) {
+            listOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_ADVERTISE,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ).all {
+                androidx.core.content.ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+            }
+        } else if (android.os.Build.VERSION.SDK_INT >= 23) {
+            androidx.core.content.ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
         }
     }
 

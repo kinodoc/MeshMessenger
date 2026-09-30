@@ -15,6 +15,7 @@ import android.os.IBinder
 import android.os.Looper
 import androidx.core.app.NotificationCompat
 import com.example.meshmessenger.MainActivity
+import com.example.meshmessenger.R
 
 /** Keeps the mesh transports alive while the UI is not visible. */
 class MeshForegroundService : Service() {
@@ -22,6 +23,7 @@ class MeshForegroundService : Service() {
         private const val CHANNEL_ID = "mesh_runtime"
         private const val NOTIFICATION_ID = 1001
 
+        const val ACTION_APP_START = "com.example.meshmessenger.APP_START"
         const val ACTION_START = "com.example.meshmessenger.START_MESH"
         const val ACTION_STOP = "com.example.meshmessenger.STOP_MESH"
         const val ACTION_SEND_IP = "com.example.meshmessenger.SEND_IP"
@@ -72,7 +74,7 @@ class MeshForegroundService : Service() {
 
         startForeground(
             NOTIFICATION_ID,
-            notification("Mesh работает в фоне")
+            notification("Mesh Messenger работает")
         )
 
         pendingIp = PendingIpMessageStore(this)
@@ -86,6 +88,11 @@ class MeshForegroundService : Service() {
     ): Int {
         when (intent?.action) {
 
+            ACTION_APP_START -> {
+                updateNotification("Mesh Messenger работает")
+                sendMeshStatus(false)
+            }
+
             ACTION_MESH_STATUS_REQUEST -> {
                 sendMeshStatus(meshEnabled && (node != null || ipTransport != null))
             }
@@ -98,6 +105,7 @@ class MeshForegroundService : Service() {
             ACTION_STOP -> {
                 meshEnabled = false
                 stopMesh()
+                updateNotification("Mesh Messenger работает")
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -317,7 +325,8 @@ class MeshForegroundService : Service() {
             CHANNEL_ID
         )
             .setSmallIcon(
-                android.R.drawable.stat_sys_data_bluetooth
+                if (meshEnabled) R.drawable.ic_mesh_notification_active
+                else R.drawable.ic_mesh_notification
             )
             .setContentTitle("Mesh Messenger")
             .setContentText(text)
