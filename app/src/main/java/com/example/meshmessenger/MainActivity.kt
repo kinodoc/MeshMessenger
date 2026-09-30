@@ -169,24 +169,21 @@ class MainActivity : ComponentActivity() {
             text = ""
         }
         root.addView(updateStatus)
-        root.addView(log)
         setContentView(root)
         status.text = "Mesh Messenger готов • контактов: ${contacts.all().size}"
     }
 
 
     private fun checkForUpdates(manual: Boolean) {
-        if (manual) log.text = "Проверяем обновления…"
+        if (manual) updateStatus.text = "Проверяем обновления…"
         updater.check { result ->
             result.onSuccess { release ->
                 when {
                     release == null -> if (manual) {
-                        updateStatus.text = ""
-                        log.text = "В GitHub Release нет APK для установки"
+                        updateStatus.text = "В GitHub Release нет APK для установки"
                     }
                     !updater.isNewer(release.version) -> if (manual) {
-                        updateStatus.text = ""
-                        log.text = "Установлена актуальная версия ${BuildConfig.VERSION_NAME}"
+                        updateStatus.text = "Установлена актуальная версия ${BuildConfig.VERSION_NAME}"
                     }
                     else -> {
                         updateStatus.text = "Доступно обновление"
@@ -196,7 +193,7 @@ class MainActivity : ComponentActivity() {
             }.onFailure { error ->
                 if (manual) {
                     val cause = error.cause?.let { "\nПричина: ${it.javaClass.simpleName}: ${it.message}" }.orEmpty()
-                    log.text = "Не удалось проверить обновление: ${error.javaClass.simpleName}: ${error.message ?: "без сообщения"}$cause"
+                    updateStatus.text = "Не удалось проверить обновление: ${error.javaClass.simpleName}: ${error.message ?: "без сообщения"}$cause"
                 }
             }
         }
@@ -207,9 +204,9 @@ class MainActivity : ComponentActivity() {
             .setTitle("Доступно обновление ${release.version}")
             .setMessage("Текущая версия: ${BuildConfig.VERSION_NAME}\nНовая версия будет загружена напрямую из GitHub и запущена штатным установщиком Android. Настройки и контакты приложения при обычном обновлении сохраняются.")
             .setPositiveButton("Скачать и установить") { _, _ ->
-                log.text = "Загрузка обновления ${release.version}…"
+                updateStatus.text = "Загрузка обновления ${release.version}…"
                 updater.downloadAndInstall(release) { error ->
-                    log.text = "Ошибка загрузки обновления: ${error.message ?: error.javaClass.simpleName}"
+                    updateStatus.text = "Ошибка загрузки обновления: ${error.message ?: error.javaClass.simpleName}"
                 }
             }
             .setNegativeButton("Позже", null)
@@ -396,7 +393,7 @@ class MainActivity : ComponentActivity() {
             .setPositiveButton("Сохранить") { _, _ ->
                 identity.displayName = input.text.toString()
                 buildHome()
-                log.text = "Имя сохранено: ${identity.displayName}"
+
             }
             .setNegativeButton("Отмена", null)
             .show()
