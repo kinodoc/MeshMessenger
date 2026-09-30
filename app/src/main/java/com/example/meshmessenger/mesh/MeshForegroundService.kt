@@ -66,6 +66,7 @@ class MeshForegroundService : Service() {
     private lateinit var chats: ChatStore
     private var blePeerCount = 0
     private var netBirdPeerCount = 0
+    private lateinit var diagnostics: MeshDiagnostics
 
     private val retryHandler = Handler(Looper.getMainLooper())
 
@@ -79,6 +80,14 @@ class MeshForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+
+        diagnostics = MeshDiagnostics(this)
+        diagnostics.event("SERVICE_CREATE")
+        val previousCrashHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            diagnostics.crash(thread, throwable)
+            previousCrashHandler?.uncaughtException(thread, throwable)
+        }
 
         createChannel()
 
@@ -173,6 +182,7 @@ class MeshForegroundService : Service() {
     }
 
     private fun startMesh() {
+        diagnostics.event("MESH_START")
         if (node != null || ipTransport != null) {
             sendMeshStatus(meshEnabled && (node != null || ipTransport != null))
             return
@@ -406,6 +416,7 @@ class MeshForegroundService : Service() {
     }
 
     private fun stopMesh() {
+        diagnostics.event("MESH_STOP")
         retryHandler.removeCallbacks(retryRunnable)
 
         node?.stop()
@@ -483,6 +494,7 @@ class MeshForegroundService : Service() {
 
 
     private fun updateNotification(text: String) {
+        diagnostics.event("STATUS", text)
         getSystemService(
             NotificationManager::class.java
         ).notify(
