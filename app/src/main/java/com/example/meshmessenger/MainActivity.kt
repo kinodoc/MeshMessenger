@@ -60,7 +60,22 @@ class MainActivity : ComponentActivity() {
         log.text = "QR-код считан. Проверь данные и нажми «Добавить»."
     }
 
-    private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result -> if (result.values.all { it }) startMeshIfAllowed() else { status.text = "Разрешения Bluetooth не предоставлены"; log.text = "Mesh не запущен: разрешения Bluetooth необходимы для работы." } }
+    private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        if (result.values.all { it }) startMeshIfAllowed()
+        else {
+            status.text = "Не все разрешения предоставлены"
+            log.text = "Для mesh нужны Bluetooth и, на Android 11 и ниже, доступ к геопозиции для BLE-сканирования."
+        }
+    }
+
+    private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) launchQrScanner()
+        else log.text = "Камера не разрешена: сканирование QR-кода недоступно."
+    }
+
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) log.text = "Уведомления не разрешены: сообщения и работа mesh в фоне могут отображаться без уведомлений."
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -74,6 +89,8 @@ class MainActivity : ComponentActivity() {
         netBird = NetBirdGuard(this)
         updater = UpdateManager(this)
         buildHome()
+        requestNotificationPermission()
+        requestBluetoothPermissionsIfNeeded()
         netBirdHandler.postDelayed({ checkForUpdates(false) }, 2000L)
         updateNetBirdStatus()
     }
@@ -181,8 +198,44 @@ class MainActivity : ComponentActivity() {
         builder.setNegativeButton("Закрыть", null).show()
     }
 
+    private fun requestNotificationPermission() {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            androidx.core.content.ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    private fun requestBluetoothPermissionsIfNeeded() {
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
+            val required = arrayOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_ADVERTISE,
+                Manifest.permission.BLUETOOTH_CONNECT
+            )
+            val missing = required.filter {
+                androidx.core.content.ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+            }
+            if (missing.isNotEmpty()) permissions.launch(missing.toTypedArray())
+        } else if (android.os.Build.VERSION.SDK_INT >= 23 &&
+            androidx.core.content.ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
+        ) {
+            permissions.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION))
+        }
+    }
+
     private fun requestMeshPermissions() {
-        if (android.os.Build.VERSION.SDK_INT >= 31) permissions.launch(arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT)) else startMeshIfAllowed()
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
+            permissions.launch(arrayOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_ADVERTISE,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ))
+        } else if (android.os.Build.VERSION.SDK_INT >= 23) {
+            permissions.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION))
+        } else {
+            startMeshIfAllowed()
+        }
     }
 
     private fun startMeshIfAllowed() {
@@ -221,14 +274,11 @@ class MainActivity : ComponentActivity() {
         val scan = Button(this).apply {
             text = "▣ СКАНИРОВАТЬ QR КАМЕРОЙ"
             setOnClickListener {
-                qrScanner.launch(
-                    ScanOptions().apply {
-                        setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                        setPrompt("Наведите камеру на QR-код контакта")
-                        setBeepEnabled(true)
-                        setOrientationLocked(true)
-                    }
-                )
+                if (androidx.core.content.ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                    launchQrScanner()
+                } else {
+                    cameraPermission.launch(Manifest.permission.CAMERA)
+                }
             }
         }
 
@@ -237,6 +287,17 @@ class MainActivity : ComponentActivity() {
         box.addView(scan)
 
         AlertDialogBuilder(box, "Добавить контакт") { }
+    }
+
+    private fun launchQrScanner() {
+        qrScanner.launch(
+            ScanOptions().apply {
+                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                setPrompt("Наведите камеру на QR-код контакта")
+                setBeepEnabled(true)
+                setOrientationLocked(true)
+            }
+        )
     }
 
     private fun AlertDialogBuilder(view: LinearLayout, title: String, ignored: () -> Unit) {
