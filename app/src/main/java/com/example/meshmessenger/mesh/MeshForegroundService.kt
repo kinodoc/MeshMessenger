@@ -57,6 +57,7 @@ class MeshForegroundService : Service() {
     private var meshEnabled = false
     private var ipTransport: MeshIpTransport? = null
     private var netBirdGuard: NetBirdGuard? = null
+    private var discovery: MeshDiscovery? = null
     private lateinit var pendingIp: PendingIpMessageStore
     private lateinit var contacts: ContactStore
     private var blePeerCount = 0
@@ -180,6 +181,34 @@ class MeshForegroundService : Service() {
         netBirdGuard = NetBirdGuard(this)
 
         runCatching {
+            discovery = MeshDiscovery(
+                localId = identity.nodeId,
+                localName = identity.displayName,
+                publicKey = identity.keyPair.public.encoded,
+                onPeer = { nodeId, name, publicKey, ip ->
+                    val key = android.util.Base64.encodeToString(publicKey, android.util.Base64.NO_WRAP)
+                    val current = contacts.get(nodeId)
+                    contacts.upsert(
+                        ContactStore.Contact(
+                            nodeId = nodeId,
+                            name = current?.name?.takeIf { it.isNotBlank() } ?: name,
+                            publicKeyBase64 = key,
+                            netBirdIp = ip.ifBlank { current?.netBirdIp.orEmpty() }
+                        )
+                    )
+                },
+                onCount = { count ->
+                    netBirdPeerCount = count
+                    sendPeerStatus()
+                },
+                onStatus = { updateNotification(it) }
+            ).also { it.start() }
+        }.onFailure {
+            discovery = null
+            android.util.Log.e("MeshMessenger", "Discovery start failed", it)
+        }
+
+        runCatching {
             ipTransport = MeshIpTransport(
                 localId = identity.nodeId,
                 router = router,
@@ -210,12 +239,26 @@ class MeshForegroundService : Service() {
                     this,
                     adapter,
                     identity.nodeId,
+                    identity.displayName,
+                    identity.keyPair.public.encoded,
                     router,
                     queue,
                     { updateNotification(it) },
                     { text, sourceId, packet ->
                         rememberPeer(packet)
                         handleMeshMessage(text, sourceId)
+                    },
+                    { nodeId, name, publicKey ->
+                        val key = android.util.Base64.encodeToString(publicKey, android.util.Base64.NO_WRAP)
+                        val current = contacts.get(nodeId)
+                        contacts.upsert(
+                            ContactStore.Contact(
+                                nodeId = nodeId,
+                                name = current?.name?.takeIf { it.isNotBlank() } ?: name,
+                                publicKeyBase64 = key,
+                                netBirdIp = current?.netBirdIp.orEmpty()
+                            )
+                        )
                     },
                     { packetId -> sendDeliveryStatus(packetId) },
                     { count ->
@@ -333,6 +376,9 @@ class MeshForegroundService : Service() {
 
         ipTransport?.stop()
         ipTransport = null
+
+        discovery?.stop()
+        discovery = null
 
         netBirdGuard = null
         blePeerCount = 0

@@ -9,6 +9,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import android.net.Network
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -108,7 +109,10 @@ class MeshIpTransport(
         }
 
         return runCatching {
+            val network = guard.netBirdNetwork()
+                ?: throw IllegalStateException("NetBird network unavailable")
             Socket().use { socket ->
+                network.bindSocket(socket)
                 socket.connect(
                     InetSocketAddress(address, PORT),
                     CONNECT_TIMEOUT_MS

@@ -307,6 +307,13 @@ class MainActivity : ComponentActivity() {
     private fun startMeshIfAllowed() {
         val bluetoothAdapter = adapter ?: run { status.text = "Bluetooth недоступен"; log.text = "На этом устройстве не найден Bluetooth-адаптер."; return }
         if (!bluetoothAdapter.isEnabled) { status.text = "Включи Bluetooth"; return }
+        if (android.os.Build.VERSION.SDK_INT <= 30 &&
+            !(getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager).isLocationEnabled
+        ) {
+            status.text = "Включи геолокацию для BLE"
+            log.text = "На Android 11 и ниже система не выполняет BLE-сканирование при выключенной геолокации."
+            return
+        }
         startService(Intent(this, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_START))
         status.text = "Mesh запускается..."
     }

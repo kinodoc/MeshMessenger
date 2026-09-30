@@ -3,6 +3,7 @@ package com.example.meshmessenger.mesh
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.Network
 import java.net.Inet4Address
 import java.net.NetworkInterface
 
@@ -120,6 +121,19 @@ class NetBirdGuard(private val context: Context) {
         }
 
         return null
+    }
+
+    fun netBirdNetwork(): Network? {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        return cm.allNetworks
+            .mapNotNull { network ->
+                val caps = cm.getNetworkCapabilities(network) ?: return@mapNotNull null
+                if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return@mapNotNull null
+                val hasNetBirdIp = cm.getLinkProperties(network)?.linkAddresses
+                    ?.any { isNetBirdAddress(it.address) } == true
+                if (hasNetBirdIp) network else null
+            }
+            .firstOrNull()
     }
 
     fun isNetBirdAddress(address: java.net.InetAddress): Boolean {
