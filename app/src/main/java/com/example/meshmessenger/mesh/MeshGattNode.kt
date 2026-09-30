@@ -126,6 +126,8 @@ class MeshGattNode(
         server?.addService(gattService)
 
         // Advertising starts from onServiceAdded() so clients never discover an incomplete GATT server.
+    }
+
     @SuppressLint("MissingPermission")
     private fun startBleAdvertisingAndScan() {
         if (advertiser != null || scanner != null) return
