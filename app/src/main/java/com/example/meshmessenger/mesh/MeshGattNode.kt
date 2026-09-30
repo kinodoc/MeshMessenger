@@ -7,7 +7,9 @@ import android.bluetooth.le.*
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import java.nio.ByteBuffer
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /** Bidirectional BLE GATT transport with a durable store-and-forward queue. */
 class MeshGattNode(
@@ -35,12 +37,28 @@ class MeshGattNode(
     private val txCharacteristic = BluetoothGattCharacteristic(tx, BluetoothGattCharacteristic.PROPERTY_NOTIFY, BluetoothGattCharacteristic.PERMISSION_READ)
     private val descriptor = BluetoothGattDescriptor(cccd, BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE)
 
+    companion object {
+        private const val FRAGMENT_MAGIC: Byte = 0x4D
+        private const val FRAGMENT_HEADER_SIZE = 21
+        private const val FRAGMENT_CHUNK_SIZE = 180
+        private const val MAX_FRAGMENTS = 64
+        private const val REASSEMBLY_TIMEOUT_MS = 30_000L
+    }
+
+    private data class Assembly(
+        val createdAt: Long,
+        val count: Int,
+        val parts: Array<ByteArray?>
+    )
+
+    private val assemblies = ConcurrentHashMap<String, MutableMap<UUID, Assembly>>()
+
     @SuppressLint("MissingPermission")
     fun start() {
         if (Build.VERSION.SDK_INT >= 31 && context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
         server = manager.openGattServer(context, object : BluetoothGattServerCallback() {
             override fun onCharacteristicWriteRequest(device: BluetoothDevice, requestId: Int, characteristic: BluetoothGattCharacteristic, preparedWrite: Boolean, responseNeeded: Boolean, offset: Int, value: ByteArray) {
-                if (characteristic.uuid == rx) handleIncoming(device.address, value)
+                if (characteristic.uuid == rx) handleIncomingFragment(device.address, value)
                 if (responseNeeded) server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
             }
             override fun onDescriptorWriteRequest(device: BluetoothDevice, requestId: Int, descriptor: BluetoothGattDescriptor, preparedWrite: Boolean, responseNeeded: Boolean, offset: Int, value: ByteArray) {
@@ -48,7 +66,10 @@ class MeshGattNode(
                 if (responseNeeded) server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
             }
             override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
-                if (newState != BluetoothProfile.STATE_CONNECTED) notifyReady.remove(device.address)
+                if (newState != BluetoothProfile.STATE_CONNECTED) {
+                    notifyReady.remove(device.address)
+                    assemblies.remove(device.address)
+                }
             }
         })
         val gattService = BluetoothGattService(service, BluetoothGattService.SERVICE_TYPE_PRIMARY)
@@ -109,6 +130,7 @@ class MeshGattNode(
                 } else {
                     peers.remove(device.address)
                     notifyReady.remove(device.address)
+                    assemblies.remove(device.address)
                     onPeerCountChanged(peers.size)
                     g.close()
                 }
@@ -132,11 +154,81 @@ class MeshGattNode(
                 }
             }
             override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-                if (characteristic.uuid == tx) handleIncoming(device.address, characteristic.value)
+                if (characteristic.uuid == tx) handleIncomingFragment(device.address, characteristic.value)
             }
         }
         peers[device.address] = device.connectGatt(context, false, callback)
         onPeerCountChanged(peers.size)
+    }
+
+    private fun handleIncomingFragment(from: String, bytes: ByteArray) {
+        val packetBytes = acceptFragment(from, bytes) ?: return
+        handleIncoming(from, packetBytes)
+    }
+
+    private fun acceptFragment(from: String, bytes: ByteArray): ByteArray? {
+        if (bytes.isEmpty()) return null
+        if (bytes[0] != FRAGMENT_MAGIC) return bytes
+        if (bytes.size < FRAGMENT_HEADER_SIZE) return null
+
+        return runCatching {
+            val b = ByteBuffer.wrap(bytes)
+            b.get()
+            val id = UUID(b.long, b.long)
+            val index = b.short.toInt() and 0xffff
+            val count = b.short.toInt() and 0xffff
+
+            require(count in 1..MAX_FRAGMENTS)
+            require(index in 0 until count)
+            require(bytes.size <= FRAGMENT_HEADER_SIZE + FRAGMENT_CHUNK_SIZE)
+
+            val payload = ByteArray(b.remaining())
+            b.get(payload)
+
+            val byMessage = assemblies.getOrPut(from) { mutableMapOf() }
+            val now = System.currentTimeMillis()
+            byMessage.entries.removeIf { now - it.value.createdAt > REASSEMBLY_TIMEOUT_MS }
+
+            val assembly = byMessage[id] ?: Assembly(now, count, arrayOfNulls(count)).also {
+                byMessage[id] = it
+            }
+
+            require(assembly.count == count)
+            assembly.parts[index] = payload
+
+            if (assembly.parts.any { it == null }) {
+                null
+            } else {
+                byMessage.remove(id)
+                val total = assembly.parts.sumOf { it!!.size }
+                ByteArray(total).also { result ->
+                    var offset = 0
+                    assembly.parts.forEach { part ->
+                        val p = part!!
+                        p.copyInto(result, offset)
+                        offset += p.size
+                    }
+                }
+            }
+        }.getOrNull()
+    }
+
+    private fun fragment(bytes: ByteArray): List<ByteArray> {
+        val id = MeshPacket.decode(bytes)?.messageId
+            ?: throw IllegalArgumentException("Invalid mesh packet")
+        val count = (bytes.size + FRAGMENT_CHUNK_SIZE - 1) / FRAGMENT_CHUNK_SIZE
+        require(count in 1..MAX_FRAGMENTS) { "Mesh packet requires too many BLE fragments" }
+
+        return bytes.asList().chunked(FRAGMENT_CHUNK_SIZE).mapIndexed { index, chunk ->
+            ByteBuffer.allocate(FRAGMENT_HEADER_SIZE + chunk.size)
+                .put(FRAGMENT_MAGIC)
+                .putLong(id.mostSignificantBits)
+                .putLong(id.leastSignificantBits)
+                .putShort(index.toShort())
+                .putShort(count.toShort())
+                .put(chunk.toByteArray())
+                .array()
+        }
     }
 
     private fun handleIncoming(from: String, bytes: ByteArray) {
@@ -162,26 +254,38 @@ class MeshGattNode(
         val ready = peers.filterKeys { notifyReady.contains(it) }.values.toList()
         if (ready.isEmpty()) return
         for (entry in queue.snapshot()) {
-            val bytes = entry.bytes
-            if (bytes.size > 180) continue
+            val fragments = runCatching { fragment(entry.bytes) }.getOrNull() ?: continue
             var delivered = false
+
             for (gatt in ready) {
                 val c = gatt.getService(service)?.getCharacteristic(rx) ?: continue
                 c.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-                c.value = bytes
-                if (runCatching { gatt.writeCharacteristic(c) }.getOrDefault(false)) delivered = true
+                var peerDelivered = true
+
+                for (part in fragments) {
+                    c.value = part
+                    if (!runCatching { gatt.writeCharacteristic(c) }.getOrDefault(false)) {
+                        peerDelivered = false
+                        break
+                    }
+                }
+
+                if (peerDelivered) delivered = true
             }
+
             if (delivered) queue.remove(entry.id)
         }
     }
 
     @SuppressLint("MissingPermission")
     private fun broadcast(bytes: ByteArray, except: String? = null) {
-        if (bytes.size > 180) return
+        val fragments = runCatching { fragment(bytes) }.getOrNull() ?: return
         for ((address, gatt) in peers.toMap()) {
             if (address == except || !notifyReady.contains(address)) continue
-            val characteristic = txCharacteristic.apply { value = bytes }
-            runCatching { server?.notifyCharacteristicChanged(gatt.device, characteristic, false) }
+            for (part in fragments) {
+                val characteristic = txCharacteristic.apply { value = part }
+                runCatching { server?.notifyCharacteristicChanged(gatt.device, characteristic, false) }
+            }
         }
     }
 
@@ -193,8 +297,11 @@ class MeshGattNode(
         peers.values.forEach { runCatching { it.close() } }
         peers.clear()
         notifyReady.clear()
+        assemblies.clear()
         onPeerCountChanged(0)
         server?.close()
         server = null
     }
 }
+
+[executed on device: debian (c42d85b4-c6ea-4e8c-a150-b48bad8af3d6)]
