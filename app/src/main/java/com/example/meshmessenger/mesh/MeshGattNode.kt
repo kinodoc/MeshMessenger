@@ -52,6 +52,7 @@ class MeshGattNode(
         private const val FRAGMENT_CHUNK_SIZE = 180
         private const val MAX_FRAGMENTS = 65535
         private const val REASSEMBLY_TIMEOUT_MS = 30_000L
+        private const val DELIVERY_RETRY_MS = 10_000L
     }
 
     private data class Assembly(
@@ -67,6 +68,9 @@ class MeshGattNode(
     private val helloWriting = mutableSetOf<String>()
     private val notificationQueues = mutableMapOf<String, ArrayDeque<ByteArray>>()
     private val notifying = mutableSetOf<String>()
+    // A successful GATT write only confirms the characteristic write callback.
+    // Keep the durable packet until the destination sends the application ACK.
+    private val awaitingDelivery = mutableMapOf<String, MutableMap<UUID, Long>>()
 
     @SuppressLint("MissingPermission")
     fun start() {
@@ -88,6 +92,7 @@ class MeshGattNode(
                 if (descriptor.uuid == cccd && value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)) {
                     notifyReady.add(device.address)
                     sendHelloTo(device)
+                    flushQueue()
                 }
                 if (responseNeeded) server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
             }
@@ -100,6 +105,7 @@ class MeshGattNode(
                     assemblies.remove(device.address)
                     notificationQueues.remove(device.address)
                     notifying.remove(device.address)
+                    awaitingDelivery.remove(device.address)
                 }
                 onPeerCountChanged(peerCount())
             }
@@ -195,15 +201,33 @@ class MeshGattNode(
                     helloWriting.remove(device.address)
                     notificationQueues.remove(device.address)
                     notifying.remove(device.address)
+                    awaitingDelivery.remove(device.address)
                     onPeerCountChanged(peerCount())
                     g.close()
                 }
             }
             override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) { g.discoverServices() }
             override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
-                val remoteService = g.getService(service) ?: return
-                val remoteRx = remoteService.getCharacteristic(rx) ?: return
-                val remoteTx = remoteService.getCharacteristic(tx) ?: return
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    onStatus("BLE: ошибка обнаружения сервисов $status")
+                    g.disconnect()
+                    return
+                }
+                val remoteService = g.getService(service) ?: run {
+                    onStatus("BLE: сервис Mesh не найден")
+                    g.disconnect()
+                    return
+                }
+                val remoteRx = remoteService.getCharacteristic(rx) ?: run {
+                    onStatus("BLE: RX characteristic не найден")
+                    g.disconnect()
+                    return
+                }
+                val remoteTx = remoteService.getCharacteristic(tx) ?: run {
+                    onStatus("BLE: TX characteristic не найден")
+                    g.disconnect()
+                    return
+                }
                 g.setCharacteristicNotification(remoteTx, true)
                 val d = remoteTx.getDescriptor(cccd) ?: return
                 d.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
@@ -241,7 +265,9 @@ class MeshGattNode(
                     val remaining = task.fragments.drop(1)
                     queueForPeer.removeFirst()
                     if (remaining.isEmpty()) {
-                        queue.remove(task.messageId)
+                        if (queue.snapshot().any { it.id == task.messageId }) {
+                            awaitingDelivery.getOrPut(address) { mutableMapOf() }[task.messageId] = System.currentTimeMillis()
+                        }
                     } else {
                         queueForPeer.addFirst(task.copy(fragments = remaining))
                     }
@@ -376,7 +402,9 @@ class MeshGattNode(
         if (packet.destinationId == localId) {
             val text = router.decryptForLocal(packet) ?: "[не удалось расшифровать]"
             if (text.startsWith(MeshRouter.DELIVERY_ACK_PREFIX)) {
-                onDeliveryAck(text.removePrefix(MeshRouter.DELIVERY_ACK_PREFIX))
+                val deliveredId = text.removePrefix(MeshRouter.DELIVERY_ACK_PREFIX)
+                markDelivered(deliveredId)
+                onDeliveryAck(deliveredId)
             } else {
                 onMessage(text, packet.sourceId, packet)
                 val ack = runCatching { router.createDeliveryAck(packet) }.getOrNull()
@@ -387,6 +415,13 @@ class MeshGattNode(
             queue.enqueue(next)
             broadcast(next.encode(), except = from)
         }
+    }
+
+    private fun markDelivered(messageId: String) {
+        val id = runCatching { UUID.fromString(messageId) }.getOrNull() ?: return
+        queue.remove(id)
+        for (pending in awaitingDelivery.values) pending.remove(id)
+        awaitingDelivery.entries.removeIf { it.value.isEmpty() }
     }
 
     @SuppressLint("MissingPermission")
@@ -419,14 +454,21 @@ class MeshGattNode(
             val device = serverClients[address] ?: continue
             if (notificationQueues[address]?.isNotEmpty() == true) continue
             for (entry in entries) {
+                val waitingSince = awaitingDelivery[address]?.get(entry.id)
+                if (waitingSince != null && System.currentTimeMillis() - waitingSince < DELIVERY_RETRY_MS) continue
+                if (waitingSince != null) awaitingDelivery[address]?.remove(entry.id)
                 val fragments = runCatching { fragment(entry.bytes) }.getOrNull() ?: continue
                 fragments.forEach { enqueueNotification(device, it) }
+                awaitingDelivery.getOrPut(address) { mutableMapOf() }[entry.id] = System.currentTimeMillis()
             }
         }
 
         val ready = peers.filterKeys { notifyReady.contains(it) }.keys.toList()
         for (address in ready) {
             for (entry in entries) {
+                val waitingSince = awaitingDelivery[address]?.get(entry.id)
+                if (waitingSince != null && System.currentTimeMillis() - waitingSince < DELIVERY_RETRY_MS) continue
+                if (waitingSince != null) awaitingDelivery[address]?.remove(entry.id)
                 val fragments = runCatching { fragment(entry.bytes) }.getOrNull() ?: continue
                 val q = writeQueues.getOrPut(address) { ArrayDeque() }
                 if (q.none { it.messageId == entry.id }) {
@@ -524,6 +566,7 @@ class MeshGattNode(
         notifyReady.clear()
         notificationQueues.clear()
         notifying.clear()
+        awaitingDelivery.clear()
         assemblies.clear()
         onPeerCountChanged(0)
         server?.close()
