@@ -39,9 +39,24 @@ class UpdateManager(private val context: Context) {
                 ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
         }
 
-        val network = candidates.firstOrNull()
-            ?: error("Обычная интернет-сеть (Wi‑Fi/4G/5G) недоступна для проверки обновлений")
-        return network.openConnection(URL(url)) as HttpURLConnection
+        for (network in candidates) {
+            try {
+                val connection = network.openConnection(URL(url)) as HttpURLConnection
+                // При активном VPN Android может запрещать приложению
+                // явно привязывать сокет к физической сети (EPERM).
+                // Проверяем привязку сразу и при неудаче пробуем следующую.
+                connection.connectTimeout = 5000
+                connection.connect()
+                return connection
+            } catch (_: Exception) {
+                // Сеть могла исчезнуть или стать недоступной для UID из-за VPN.
+            }
+        }
+
+        // Если Android не разрешает per-network binding при активном VPN,
+        // используем обычный маршрут системы. Он может идти через VPN,
+        // но не требует запрещённого bindSocket().
+        return URL(url).openConnection() as HttpURLConnection
     }
 
     companion object {

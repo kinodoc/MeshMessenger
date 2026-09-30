@@ -198,7 +198,8 @@ class MainActivity : ComponentActivity() {
                 }
             }.onFailure { error ->
                 if (manual) {
-                    updateStatus.text = "Не удалось проверить обновление: ${error.message ?: "Нет обычного интернет-соединения"}"
+                    updateStatus.text = "Не удалось проверить обновление. Проверь подключение к интернету."
+                    android.util.Log.w("MeshMessenger", "Update check failed", error)
                 }
             }
         }
