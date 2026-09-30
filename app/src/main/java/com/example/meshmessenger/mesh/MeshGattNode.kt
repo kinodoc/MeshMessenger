@@ -303,5 +303,3 @@ class MeshGattNode(
         server = null
     }
 }
-
-[executed on device: debian (c42d85b4-c6ea-4e8c-a150-b48bad8af3d6)]
