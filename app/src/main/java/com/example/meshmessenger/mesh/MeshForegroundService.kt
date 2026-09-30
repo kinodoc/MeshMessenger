@@ -67,6 +67,7 @@ class MeshForegroundService : Service() {
     private var blePeerCount = 0
     private var netBirdPeerCount = 0
     private lateinit var diagnostics: MeshDiagnostics
+    private lateinit var bluetoothMonitor: MeshBluetoothMonitor
 
     private val retryHandler = Handler(Looper.getMainLooper())
 
@@ -83,6 +84,11 @@ class MeshForegroundService : Service() {
 
         diagnostics = MeshDiagnostics(this)
         diagnostics.event("SERVICE_CREATE")
+        val bluetoothAdapter = runCatching {
+            (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        }.getOrNull()
+        bluetoothMonitor = MeshBluetoothMonitor(this, bluetoothAdapter, diagnostics)
+        bluetoothMonitor.start()
         val previousCrashHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             diagnostics.crash(thread, throwable)
@@ -309,7 +315,8 @@ class MeshForegroundService : Service() {
                     { count ->
                         blePeerCount = count
                         sendPeerStatus()
-                    }
+                    },
+                    { type, detail -> diagnostics.event(type, detail) }
                 ).also {
                     it.start()
                 }
@@ -515,6 +522,7 @@ class MeshForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        bluetoothMonitor.stop()
         stopMesh()
         stopNetBirdLayer()
         super.onDestroy()

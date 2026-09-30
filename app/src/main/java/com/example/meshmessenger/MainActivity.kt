@@ -18,6 +18,7 @@ import android.net.Uri
 import android.widget.*
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
 import com.example.meshmessenger.mesh.*
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.MultiFormatWriter
@@ -170,6 +171,7 @@ class MainActivity : ComponentActivity() {
         root.addView(Button(this).apply { text = "▣ Мой QR-код"; setOnClickListener { showOwnQr() } })
         root.addView(Button(this).apply { text = "Контакты"; setOnClickListener { contactsDialog() } })
         root.addView(Button(this).apply { text = "↻ Проверить обновление"; setOnClickListener { checkForUpdates(true) } })
+        root.addView(Button(this).apply { text = "🐞 Отправить bugreport"; setOnClickListener { shareBugReport() } })
         updateStatus = TextView(this).apply {
             textSize = 15f
             setPadding(0, 2, 0, 8)
@@ -186,6 +188,26 @@ class MainActivity : ComponentActivity() {
         status.text = "Mesh Messenger готов • контактов: ${contacts.all().size}"
     }
 
+
+    private fun shareBugReport() {
+        runCatching {
+            val diagnostics = MeshDiagnostics(this)
+            val monitor = MeshBluetoothMonitor(this, adapter, diagnostics)
+            val report = MeshBugReport.create(this, diagnostics, monitor.snapshot())
+            val uri = FileProvider.getUriForFile(this, "${BuildConfig.APPLICATION_ID}.fileprovider", report)
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "application/zip"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, "MeshMessenger bugreport ${BuildConfig.VERSION_NAME}")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(intent, "Отправить bugreport"))
+            log.text = "Bugreport подготовлен: ${report.name}"
+        }.onFailure {
+            android.util.Log.e("MeshMessenger", "Bugreport creation failed", it)
+            log.text = "Не удалось подготовить bugreport: ${it.message ?: it.javaClass.simpleName}"
+        }
+    }
 
     private fun checkForUpdates(manual: Boolean) {
         if (manual) updateStatus.text = "Проверяем обновления…"

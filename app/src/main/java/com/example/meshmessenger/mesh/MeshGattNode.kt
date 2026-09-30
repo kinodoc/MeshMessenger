@@ -27,11 +27,13 @@ class MeshGattNode(
     private val onMessage: (String, String, MeshPacket) -> Unit,
     private val onPeer: (nodeId: String, name: String, publicKey: ByteArray) -> Unit = { _, _, _ -> },
     private val onDeliveryAck: (String) -> Unit = {},
-    private val onPeerCountChanged: (Int) -> Unit = {}
+    private val onPeerCountChanged: (Int) -> Unit = {},
+    private val onDiagnostic: (String, String) -> Unit = { _, _ -> }
 ) {
     private val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private var server: BluetoothGattServer? = null
     private var advertiser: BluetoothLeAdvertiser? = null
+    private var advertiseCallback: AdvertiseCallback? = null
     private var scanner: BluetoothLeScanner? = null
     private var scanCallback: ScanCallback? = null
     private val peers = mutableMapOf<String, BluetoothGatt>()
@@ -136,6 +138,7 @@ class MeshGattNode(
         gattService.addCharacteristic(rxCharacteristic)
         gattService.addCharacteristic(txCharacteristic)
         server?.addService(gattService)
+        onDiagnostic("BLE_GATT_SERVER", "opened")
 
         // Advertising starts from onServiceAdded() so clients never discover an incomplete GATT server.
     }
@@ -147,8 +150,8 @@ class MeshGattNode(
         advertiser = adapter.bluetoothLeAdvertiser
         val adv = advertiser ?: run { onStatus("BLE advertising недоступен"); return }
         val settings = AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
+            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
             .setConnectable(true)
             .build()
         // Publish the stable Mesh Node ID in service data. Android exposes the
@@ -165,14 +168,18 @@ class MeshGattNode(
             .addServiceData(ParcelUuid(service), localId.toByteArray(StandardCharsets.UTF_8))
             .build()
 
-        adv.startAdvertising(settings, data, scanResponse, object : AdvertiseCallback() {
+        advertiseCallback = object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
+                onDiagnostic("BLE_ADVERTISE", "started mode=BALANCED tx=MEDIUM")
                 onStatus("Mesh активен • BLE relay готов")
             }
             override fun onStartFailure(errorCode: Int) {
+                onDiagnostic("BLE_ADVERTISE", "failed code=" + errorCode)
                 onStatus("BLE advertising error: " + errorCode)
             }
-        })
+        }
+        runCatching { adv.startAdvertising(settings, data, scanResponse, advertiseCallback!!) }
+            .onFailure { onDiagnostic("BLE_ADVERTISE", "start_exception=" + it.javaClass.simpleName) }
 
         scanner = adapter.bluetoothLeScanner
         val bleScanner = scanner ?: run {
@@ -180,7 +187,7 @@ class MeshGattNode(
             return
         }
         val scanSettings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
             .build()
 
         scanCallback = object : ScanCallback() {
@@ -195,10 +202,13 @@ class MeshGattNode(
                 connect(result.device, advertisedNodeId?.takeIf { it.isNotBlank() })
             }
             override fun onScanFailed(errorCode: Int) {
+                onDiagnostic("BLE_SCAN", "failed code=" + errorCode)
                 onStatus("BLE scan error: " + errorCode)
             }
         }
-        bleScanner.startScan(null, scanSettings, scanCallback)
+        runCatching { bleScanner.startScan(null, scanSettings, scanCallback) }
+            .onSuccess { onDiagnostic("BLE_SCAN", "started mode=BALANCED") }
+            .onFailure { onDiagnostic("BLE_SCAN", "start_exception=" + it.javaClass.simpleName) }
     }
 
     @SuppressLint("MissingPermission")
@@ -210,8 +220,10 @@ class MeshGattNode(
             connecting.contains(device.address) ||
             (stableId.isNotBlank() && (peerNodeIds.values.contains(stableId) || !connectingNodeIds.add(stableId)))) return
         connecting.add(device.address)
+        onDiagnostic("BLE_GATT_CONNECT", "start address=**" + device.address.takeLast(5) + ",node=" + stableId)
         val callback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+                onDiagnostic("BLE_GATT_STATE", "address=**" + device.address.takeLast(5) + ",status=" + status + ",state=" + newState)
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     peers[device.address] = g
                     onPeerCountChanged(peerCount())
@@ -361,6 +373,7 @@ class MeshGattNode(
                 if (duplicateAddress != null) {
                     // Same application identity reached us through a rotated BLE
                     // address. Keep the first connection and close this duplicate.
+                    onDiagnostic("BLE_DUPLICATE", "node=" + peerId + ",address=**" + from.takeLast(5))
                     peers[from]?.let { runCatching { it.disconnect() }; runCatching { it.close() } }
                     serverClients[from]?.let { runCatching { server?.cancelConnection(it) } }
                     return
@@ -605,7 +618,14 @@ class MeshGattNode(
         scanner?.let { sc -> scanCallback?.let { cb -> sc.stopScan(cb) } }
         scanCallback = null
         scanner = null
-        advertiser?.stopAdvertising(object : AdvertiseCallback() {})
+        val adv = advertiser
+        val callback = advertiseCallback
+        if (adv != null && callback != null) {
+            runCatching { adv.stopAdvertising(callback) }
+                .onSuccess { onDiagnostic("BLE_ADVERTISE", "stopped") }
+        }
+        advertiseCallback = null
+        advertiser = null
         peers.values.forEach { runCatching { it.close() } }
         peers.clear()
         serverClients.clear()
@@ -620,5 +640,6 @@ class MeshGattNode(
         onPeerCountChanged(0)
         server?.close()
         server = null
+        onDiagnostic("BLE_STOP", "all_gatt_closed")
     }
 }
