@@ -90,7 +90,7 @@ class MeshForegroundService : Service() {
 
             ACTION_APP_START -> {
                 updateNotification("Mesh Messenger работает")
-                sendMeshStatus(false)
+                sendMeshStatus(meshEnabled && (node != null || ipTransport != null))
             }
 
             ACTION_MESH_STATUS_REQUEST -> {
@@ -156,7 +156,10 @@ class MeshForegroundService : Service() {
     }
 
     private fun startMesh() {
-        if (node != null || ipTransport != null) return
+        if (node != null || ipTransport != null) {
+            sendMeshStatus(meshEnabled && (node != null || ipTransport != null))
+            return
+        }
 
         val identity = IdentityStore(this)
 

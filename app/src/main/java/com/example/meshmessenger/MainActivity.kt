@@ -637,6 +637,7 @@ class MainActivity : ComponentActivity() {
             androidx.core.content.ContextCompat.registerReceiver(this, meshMessageReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_MESSAGE), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             androidx.core.content.ContextCompat.registerReceiver(this, meshStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             androidx.core.content.ContextCompat.registerReceiver(this, peerStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_PEER_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+            startService(Intent(this, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_MESH_STATUS_REQUEST))
         } catch (t: Throwable) {
             android.util.Log.e("MeshMessenger", "onStart failure", t)
             android.app.AlertDialog.Builder(this)
