@@ -617,7 +617,14 @@ class MainActivity : ComponentActivity() {
             adjustViewBounds = true
         })
         box.addView(TextView(this).apply {
-            text = "Можно также скопировать строку и передать её другому устройству:" + System.lineSeparator() + card
+            text = "Нажми на ключ ниже, чтобы скопировать его и передать в другое приложение:" + System.lineSeparator() + card
+            textIsSelectable = true
+            setPadding(0, 16, 0, 8)
+            setOnClickListener {
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Mesh Messenger", card))
+                Toast.makeText(this@MainActivity, "Ключ скопирован", Toast.LENGTH_SHORT).show()
+            }
         })
         android.app.AlertDialog.Builder(this)
             .setTitle("Моя контактная карточка")
