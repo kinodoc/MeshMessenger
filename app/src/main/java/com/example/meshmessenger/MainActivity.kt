@@ -170,7 +170,7 @@ class MainActivity : ComponentActivity() {
         }
         root.addView(updateStatus)
         root.addView(TextView(this).apply {
-            text = "сделал Дмитрий Шалимов"
+            text = "Сделал Дмитрий Шалимов"
             gravity = android.view.Gravity.CENTER
             setTextAppearance(android.R.style.TextAppearance_Material_Button)
             setPadding(0, 16, 0, 8)
