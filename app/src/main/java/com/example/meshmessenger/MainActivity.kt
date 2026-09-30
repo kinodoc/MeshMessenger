@@ -169,6 +169,12 @@ class MainActivity : ComponentActivity() {
             text = ""
         }
         root.addView(updateStatus)
+        root.addView(TextView(this).apply {
+            text = "сделал Дмитрий Шалимов"
+            gravity = android.view.Gravity.CENTER
+            setTextAppearance(android.R.style.TextAppearance_Material_Button)
+            setPadding(0, 16, 0, 8)
+        })
         setContentView(root)
         status.text = "Mesh Messenger готов • контактов: ${contacts.all().size}"
     }
