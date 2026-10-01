@@ -56,7 +56,25 @@ class MainActivity : ComponentActivity() {
     private var selected: ContactStore.Contact? = null
     private var pendingQrField: EditText? = null
     private var meshActive = false
+    private var meshActionPending = false
+    private var pendingMeshTargetActive = false
     private lateinit var meshButton: Button
+    private val meshActionHandler = Handler(Looper.getMainLooper())
+    private val meshActionTimeout = Runnable {
+        meshActionPending = false
+        meshButton.isEnabled = true
+        startService(Intent(this, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_MESH_STATUS_REQUEST))
+    }
+
+    private fun beginMeshAction(targetActive: Boolean) {
+        if (meshActionPending) return
+        meshActionPending = true
+        pendingMeshTargetActive = targetActive
+        meshButton.isEnabled = false
+        meshButton.text = if (targetActive) "MESH ЗАПУСКАЕТСЯ…" else "MESH ОСТАНАВЛИВАЕТСЯ…"
+        meshActionHandler.removeCallbacks(meshActionTimeout)
+        meshActionHandler.postDelayed(meshActionTimeout, 10_000L)
+    }
     private var connectionStatusView: TextView? = null
     // Refresh the visible chat when a message arrives while its dialog is already open.
     private var refreshOpenChat: (() -> Unit)? = null
@@ -125,6 +143,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         updateHandler.removeCallbacks(hourlyUpdateCheck)
+        meshActionHandler.removeCallbacks(meshActionTimeout)
         super.onDestroy()
     }
 
@@ -302,7 +321,9 @@ class MainActivity : ComponentActivity() {
             if (meshActive) "ОСТАНОВИТЬ MESH" else "ЗАПУСТИТЬ MESH",
             R.drawable.ic_stop
         ) {
+            if (meshActionPending) return@actionButton
             if (meshActive) {
+                beginMeshAction(false)
                 startService(Intent(this@MainActivity, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_STOP))
             } else {
                 requestMeshPermissions()
@@ -498,6 +519,7 @@ class MainActivity : ComponentActivity() {
             log.text = "На Android 6–8 система не выполняет BLE-сканирование при выключенной геолокации."
             return
         }
+        beginMeshAction(true)
         startService(Intent(this, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_START))
         status.text = "Mesh запускается..."
     }
@@ -903,8 +925,16 @@ class MainActivity : ComponentActivity() {
             if (intent?.action != MeshForegroundService.ACTION_MESH_STATUS) return
             val active = intent.getBooleanExtra(MeshForegroundService.EXTRA_MESH_ACTIVE, false)
             meshActive = active
+            if (meshActionPending && active == pendingMeshTargetActive) {
+                meshActionPending = false
+                meshActionHandler.removeCallbacks(meshActionTimeout)
+                meshButton.isEnabled = true
+            }
             status.text = if (active) "Mesh активен" else "Mesh выключен"
-            meshButton.text = if (active) "■ Остановить mesh" else "▶ Запустить mesh"
+            if (!meshActionPending) {
+                meshButton.text = if (active) "■ Остановить mesh" else "▶ Запустить mesh"
+                meshButton.isEnabled = true
+            }
             updateSelectedContactStatus()
         }
     }
