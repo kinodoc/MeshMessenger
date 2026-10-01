@@ -73,7 +73,7 @@ jobs:
           chmod +x ./gradlew
           ./gradlew --no-daemon :app:assembleRelease
 
-          APK="app/build/outputs/apk/release/app-release.apk"
+          APK="app/build/outputs/apk/release/app-release-unsigned.apk"
           ALIGNED_APK="$RUNNER_TEMP/mesh-messenger-aligned.apk"
           FINAL_APK="MeshMessenger-$GITHUB_REF_NAME.apk"
           APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
