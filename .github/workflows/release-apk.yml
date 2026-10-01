@@ -99,7 +99,7 @@ jobs:
             --ks-pass env:RELEASE_STORE_PASSWORD \
             --ks-key-alias "$RELEASE_KEY_ALIAS" \
             --key-pass env:RELEASE_KEY_PASSWORD \
-            --v1-signing-enabled false \
+            --v1-signing-enabled true \
             --v2-signing-enabled true \
             --v3-signing-enabled false \
             --v4-signing-enabled false \
