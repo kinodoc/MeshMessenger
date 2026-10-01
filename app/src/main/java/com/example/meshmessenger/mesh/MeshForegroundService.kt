@@ -58,14 +58,13 @@ class MeshForegroundService : Service() {
 
     private var node: MeshGattNode? = null
     private var meshEnabled = false
-    private var ipTransport: MeshIpTransport? = null
-    private var netBirdGuard: NetBirdGuard? = null
+    private var ipTransport: MeshRelayTransport? = null
     private lateinit var pendingIp: PendingIpMessageStore
     private lateinit var pendingMesh: PendingMessageStore
     private lateinit var contacts: ContactStore
     private lateinit var chats: ChatStore
     private var blePeerCount = 0
-    private var netBirdPeerCount = 0
+    private var netBirdPeerCount = 0 // relay peer count; retained broadcast key for app compatibility
     private lateinit var diagnostics: MeshDiagnostics
     private lateinit var bluetoothMonitor: MeshBluetoothMonitor
 
@@ -109,8 +108,7 @@ class MeshForegroundService : Service() {
         chats = ChatStore(this)
         retryHandler.post(retryRunnable)
         meshEnabled = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_ENABLED, true)
-        // NetBird/IP discovery stays alive independently of the BLE mesh toggle.
-        // The toggle now controls only the BLE relay layer.
+        // The internet relay stays active independently of the BLE mesh toggle.
         startMesh(startBle = meshEnabled)
     }
 
@@ -153,6 +151,7 @@ class MeshForegroundService : Service() {
                         if (packet != null) {
                             android.util.Log.d("MeshGattDiag", "service_packet_decoded id=${packet.messageId} src=${packet.sourceId.take(8)} dst=${packet.destinationId.take(8)}")
                             node?.send(packet)
+                            ipTransport?.send(packet)
                         } else {
                             android.util.Log.w("MeshGattDiag", "service_packet_decode_failed bytes=${encoded.size}")
                         }
@@ -210,43 +209,28 @@ class MeshForegroundService : Service() {
 
         val queue = PendingMessageStore(this)
 
-        netBirdGuard = netBirdGuard ?: NetBirdGuard(this)
-
         if (ipTransport == null) runCatching {
-            ipTransport = MeshIpTransport(
+            ipTransport = MeshRelayTransport(
                 localId = identity.nodeId,
                 localName = identity.displayName,
                 publicKey = identity.keyPair.public.encoded,
                 router = router,
                 queue = queue,
-                guard = netBirdGuard!!,
                 onStatus = { updateNotification(it) },
-                onMessage = { text, sourceId, packet, remoteIp ->
-                    rememberPeer(packet, remoteIp)
+                onMessage = { text, sourceId, packet, _ ->
+                    rememberPeer(packet)
                     handleIncomingPersisted(text, sourceId, packet.messageId.toString(), ACTION_IP_MESSAGE)
                 },
                 onDeliveryAck = { packetId -> sendDeliveryStatus(packetId) },
-                knownTargets = {
-                    contacts.all().mapNotNull { contact ->
-                        contact.netBirdIp.trim().takeIf { it.isNotBlank() }?.let {
-                            runCatching { InetAddress.getByName(it) }.getOrNull()
-                        }
-                    }
-                },
-                onPeer = { nodeId, name, publicKey, ip ->
-                    val key = android.util.Base64.encodeToString(publicKey, android.util.Base64.NO_WRAP)
+                onPeer = { nodeId, name, publicKey, _ ->
+                    val key = Base64.encodeToString(publicKey, Base64.NO_WRAP)
                     val current = contacts.get(nodeId)
-                    val discoveredNetBirdIp = ip.takeIf { candidate ->
-                        runCatching {
-                            netBirdGuard?.isNetBirdAddress(InetAddress.getByName(candidate)) == true
-                        }.getOrDefault(false)
-                    }
                     contacts.upsert(
                         ContactStore.Contact(
                             nodeId = nodeId,
                             name = name.trim().ifBlank { nodeId.take(8) },
                             publicKeyBase64 = key,
-                            netBirdIp = discoveredNetBirdIp ?: current?.netBirdIp.orEmpty(),
+                            netBirdIp = current?.netBirdIp.orEmpty(),
                             lastSeenAt = System.currentTimeMillis()
                         )
                     )
@@ -255,13 +239,11 @@ class MeshForegroundService : Service() {
                     netBirdPeerCount = count
                     sendPeerStatus()
                 }
-            ).also {
-                it.start()
-            }
+            ).also { it.start() }
         }.onFailure {
             ipTransport = null
-            updateNotification("Внутренняя сеть: не удалось запустить транспорт")
-            android.util.Log.e("MeshMessenger", "IP transport start failed", it)
+            updateNotification("Relay: не удалось запустить транспорт")
+            android.util.Log.e("MeshMessenger", "Relay transport start failed", it)
         }
 
         if (!startBle) {
@@ -324,12 +306,6 @@ class MeshForegroundService : Service() {
 
     private fun retryPendingIp() {
         val transport = ipTransport ?: return
-        val guard = netBirdGuard ?: return
-
-        if (guard.status() != NetBirdGuard.Status.CONNECTED) {
-            return
-        }
-
         val entries = pendingIp.snapshot()
         if (entries.isEmpty()) {
             return
@@ -426,8 +402,7 @@ class MeshForegroundService : Service() {
 
     private fun stopMesh() {
         diagnostics.event("MESH_STOP")
-        // Stopping Mesh must not tear down NetBird/IP. The user toggle controls
-        // only the BLE relay; NetBird discovery and IP delivery stay available.
+        // Stopping BLE leaves the internet relay active independently.
         node?.stop()
         node = null
         blePeerCount = 0
@@ -439,7 +414,6 @@ class MeshForegroundService : Service() {
         retryHandler.removeCallbacks(retryRunnable)
         ipTransport?.stop()
         ipTransport = null
-        netBirdGuard = null
         netBirdPeerCount = 0
         sendPeerStatus()
     }

@@ -42,12 +42,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var contacts: ContactStore
     private lateinit var chats: ChatStore
     private lateinit var pendingOutbox: PendingMessageStore
-    private lateinit var netBird: NetBirdGuard
     private lateinit var updater: UpdateManager
-    private lateinit var netBirdStatus: TextView
     private lateinit var peerStatus: TextView
     private lateinit var updateStatus: TextView
-    private val netBirdHandler = Handler(Looper.getMainLooper())
     private val updateHandler = Handler(Looper.getMainLooper())
     private val hourlyUpdateCheck = object : Runnable {
         override fun run() {
@@ -55,12 +52,7 @@ class MainActivity : ComponentActivity() {
             updateHandler.postDelayed(this, 60L * 60L * 1000L)
         }
     }
-    private val netBirdCheckRunnable = object : Runnable {
-        override fun run() {
-            updateNetBirdStatus()
-            netBirdHandler.postDelayed(this, 5000L)
-        }
-    }
+
     private var selected: ContactStore.Contact? = null
     private var pendingQrField: EditText? = null
     private var meshActive = false
@@ -111,7 +103,6 @@ class MainActivity : ComponentActivity() {
         contacts = ContactStore(this)
         chats = ChatStore(this)
         pendingOutbox = PendingMessageStore(this)
-        netBird = NetBirdGuard(this)
         updater = UpdateManager(this)
         // log must exist before buildHome(): setting the network switch can invoke its listener.
         log = TextView(this)
@@ -120,7 +111,6 @@ class MainActivity : ComponentActivity() {
         requestBluetoothPermissionsIfNeeded()
         if (hasBluetoothRuntimePermissions()) startRuntimeNotification()
         // Старт не ждёт сеть: первая автопроверка через час, затем раз в час.
-        updateNetBirdStatus()
         updateHandler.postDelayed(hourlyUpdateCheck, 60L * 60L * 1000L)
     }
     catch (t: Throwable) {
@@ -293,20 +283,6 @@ class MainActivity : ComponentActivity() {
 
         root.addView(homeText("Версия приложения: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", 15f))
 
-        netBirdStatus = TextView(this).apply {
-            textSize = 15f
-            setTextColor(Color.rgb(211, 229, 255))
-            gravity = android.view.Gravity.CENTER_VERTICAL
-            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_home_card)
-            setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_network, 0, 0, 0)
-            compoundDrawablePadding = dp(12)
-            setPadding(dp(14), dp(8), dp(14), dp(8))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(64)
-            ).apply { setMargins(0, dp(6), 0, dp(5)) }
-        }
-        root.addView(netBirdStatus)
-
         peerStatus = TextView(this).apply {
             textSize = 15f
             setTextColor(Color.rgb(105, 210, 255))
@@ -321,21 +297,6 @@ class MainActivity : ComponentActivity() {
         }
         root.addView(peerStatus)
 
-        root.addView(Switch(this).apply {
-            text = "Только внутренняя сеть"
-            textSize = 16f
-            setTextColor(Color.rgb(211, 229, 255))
-            setPadding(dp(4), dp(2), 0, dp(2))
-            isChecked = netBird.onlyNetBird
-            setOnCheckedChangeListener { _, checked ->
-                netBird.onlyNetBird = checked
-                updateNetBirdStatus()
-                log.text = if (checked) "Режим только внутренней сети включён: IP-трафик разрешён только через внутреннюю сеть." else "Режим только внутренней сети выключен."
-            }
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(54)
-            )
-        })
 
         meshButton = actionButton(
             if (meshActive) "ОСТАНОВИТЬ MESH" else "ЗАПУСТИТЬ MESH",
@@ -371,7 +332,6 @@ class MainActivity : ComponentActivity() {
 
         setContentView(rootBackground)
         status.text = if (meshActive) "MESH АКТИВЕН" else "MESH ВЫКЛЮЧЕН"
-        updateNetBirdStatus()
     }
 
 
@@ -434,15 +394,6 @@ class MainActivity : ComponentActivity() {
             .show()
     }
 
-    private fun updateNetBirdStatus() {
-        val state = netBird.status()
-        val label = when (state) {
-            NetBirdGuard.Status.CONNECTED -> "● Внутренняя сеть: подключена"
-            NetBirdGuard.Status.VPN_PRESENT -> "● VPN обнаружен, внутренняя сеть не подтверждена"
-            NetBirdGuard.Status.OFFLINE -> "○ Внутренняя сеть: не подключена"
-        }
-        netBirdStatus.text = if (netBird.onlyNetBird) "$label • режим только внутренней сети" else label
-    }
 
     private fun showBatteryStatus() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -618,15 +569,10 @@ class MainActivity : ComponentActivity() {
                 val raw = fields[1].text.toString().trim()
                 val parts = raw.split("|", limit = 4)
                 val publicKey = parts.getOrNull(2).orEmpty()
-                val netBirdIp = parts.getOrNull(3)?.trim().orEmpty()
-                val validIp = netBirdIp.isBlank() || runCatching {
-                    val address = java.net.InetAddress.getByName(netBirdIp)
-                    address is java.net.Inet4Address && netBird.isNetBirdAddress(address)
-                }.getOrDefault(false)
-                if (parts.size in 3..4 && parts[0].isNotBlank() && publicKey.isNotBlank() && validIp && runCatching { CryptoManager.publicKeyFromBase64(publicKey) }.isSuccess) {
-                    contacts.upsert(ContactStore.Contact(parts[0], name, publicKey, netBirdIp))
-                    log.text = if (netBirdIp.isBlank()) "Контакт добавлен: $name • можно искать связь по BLE" else "Контакт добавлен: $name • внутренняя сеть: $netBirdIp"
-                } else log.text = "Неверная QR-карточка. Формат: NodeID|имя|publicKey и необязательно |IP внутренней сети"
+                if (parts.size >= 3 && parts[0].isNotBlank() && publicKey.isNotBlank() && runCatching { CryptoManager.publicKeyFromBase64(publicKey) }.isSuccess) {
+                    contacts.upsert(ContactStore.Contact(parts[0], name, publicKey, ""))
+                    log.text = "Контакт добавлен: $name • поиск через BLE и Relay"
+                } else log.text = "Неверная QR-карточка. Формат: NodeID|имя|publicKey"
             }.setNegativeButton("Отмена", null).show()
     }
 
@@ -874,29 +820,12 @@ class MainActivity : ComponentActivity() {
 
                 pendingOutbox.enqueue(packet)
 
-                if (netBird.onlyNetBird) {
-                    val ip = contact.netBirdIp.trim()
-                    val connected = netBird.status() == NetBirdGuard.Status.CONNECTED || !netBird.localNetBirdIp().isNullOrBlank()
-                    chats.add(contact.nodeId, text, true, ChatStore.Delivery.WAITING, packet.messageId.toString())
-
-                    if (connected && ip.isNotBlank()) {
-                        startService(Intent(this, MeshForegroundService::class.java).apply {
-                            action = MeshForegroundService.ACTION_SEND_IP
-                            putExtra(MeshForegroundService.EXTRA_IP, ip)
-                            putExtra(MeshForegroundService.EXTRA_PACKET, packet.encode())
-                        })
-                        log.text = "◷ Ожидает подтверждения получателя через внутреннюю сеть"
-                    } else {
-                        log.text = "◷ Сообщение сохранено в очереди и будет отправлено при появлении канала"
-                    }
-                } else {
-                    startService(Intent(this, MeshForegroundService::class.java).apply {
-                        action = MeshForegroundService.ACTION_SEND_MESH
-                        putExtra(MeshForegroundService.EXTRA_PACKET, packet.encode())
-                    })
-                    chats.add(contact.nodeId, text, true, ChatStore.Delivery.WAITING, packet.messageId.toString())
-                    log.text = "◷ Ожидает подтверждения получателя"
-                }
+                startService(Intent(this, MeshForegroundService::class.java).apply {
+                    action = MeshForegroundService.ACTION_SEND_MESH
+                    putExtra(MeshForegroundService.EXTRA_PACKET, packet.encode())
+                })
+                chats.add(contact.nodeId, text, true, ChatStore.Delivery.WAITING, packet.messageId.toString())
+                log.text = "◷ Ожидает подтверждения получателя"
 
                 input.text.clear()
                 refresh()
@@ -988,8 +917,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         val lastSeen = contacts.get(contact.nodeId)?.lastSeenAt ?: 0L
-        // Presence is transport-independent: NetBird discovery must remain
-        // meaningful even when the BLE Mesh toggle is off.
+        // Presence is transport-independent and is refreshed by BLE and Relay.
         val online = lastSeen > 0L && System.currentTimeMillis() - lastSeen <= 30_000L
         view.text = if (online) "● В СЕТИ" else "● НЕ В СЕТИ"
         view.setTextColor(if (online) 0xFF00FF9D.toInt() else 0xFF6B8799.toInt())
@@ -999,25 +927,16 @@ class MainActivity : ComponentActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != MeshForegroundService.ACTION_PEER_STATUS) return
             val ble = intent.getIntExtra(MeshForegroundService.EXTRA_BLE_COUNT, 0)
-            val netBirdPeers = intent.getIntExtra(MeshForegroundService.EXTRA_NETBIRD_COUNT, 0)
-            when {
-                ble > 0 && netBirdPeers > 0 -> {
-                    peerStatus.text = "КАНАЛ    BLE  +  Внутренняя сеть"
-                    peerStatus.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_network, 0, 0, 0)
-                }
-                ble > 0 -> {
-                    peerStatus.text = "КАНАЛ    BLE"
-                    peerStatus.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_bluetooth_mesh, 0, 0, 0)
-                }
-                netBirdPeers > 0 -> {
-                    peerStatus.text = "КАНАЛ    Внутренняя сеть"
-                    peerStatus.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_network, 0, 0, 0)
-                }
-                else -> {
-                    peerStatus.text = "КАНАЛ    Не установлен"
-                    peerStatus.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_channel_off, 0, 0, 0)
-                }
+            val relayPeers = intent.getIntExtra(MeshForegroundService.EXTRA_NETBIRD_COUNT, 0)
+            val bluetoothIcon = if (ble > 0) R.drawable.ic_bluetooth_mesh else 0
+            val relayIcon = if (relayPeers > 0) R.drawable.ic_relay_radio else 0
+            peerStatus.text = when {
+                ble > 0 && relayPeers > 0 -> "КАНАЛЫ  BLE  +  RELAY"
+                ble > 0 -> "КАНАЛ  BLE"
+                relayPeers > 0 -> "КАНАЛ  RELAY"
+                else -> "КАНАЛЫ НЕ ПОДКЛЮЧЕНЫ"
             }
+            peerStatus.setCompoundDrawablesWithIntrinsicBounds(bluetoothIcon, 0, relayIcon, 0)
         }
     }
 
@@ -1042,9 +961,9 @@ class MainActivity : ComponentActivity() {
             if (!success) {
                 chats.updateDelivery(packetId, ChatStore.Delivery.NOT_SENT)
                 refreshOpenChat?.invoke()
-                log.text = "⚠ Не отправлено: внутренняя сеть недоступна"
+                log.text = "⚠ Не отправлено: Relay недоступен"
             } else {
-                log.text = "◷ Доставляется через внутреннюю сеть"
+                log.text = "◷ Relay принял сообщение; ждём подтверждения получателя"
             }
         }
     }
@@ -1058,8 +977,6 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         contactStatusHandler.removeCallbacks(contactStatusRunnable)
         contactStatusHandler.post(contactStatusRunnable)
-        netBirdHandler.removeCallbacks(netBirdCheckRunnable)
-        netBirdCheckRunnable.run()
         try {
             androidx.core.content.ContextCompat.registerReceiver(this, deliveryReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_DELIVERED), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             androidx.core.content.ContextCompat.registerReceiver(this, ipStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_IP_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
@@ -1080,7 +997,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         contactStatusHandler.removeCallbacks(contactStatusRunnable)
-        netBirdHandler.removeCallbacks(netBirdCheckRunnable)
         runCatching { unregisterReceiver(deliveryReceiver) }
         runCatching { unregisterReceiver(ipStatusReceiver) }
         runCatching { unregisterReceiver(meshMessageReceiver) }
@@ -1092,12 +1008,7 @@ class MainActivity : ComponentActivity() {
 
 
     private fun showOwnQr() {
-        val ip = netBird.localNetBirdIp().orEmpty()
-        val card = if (ip.isBlank()) {
-            "${identity.nodeId}|${identity.displayName}|${identity.publicKeyBase64}"
-        } else {
-            "${identity.nodeId}|${identity.displayName}|${identity.publicKeyBase64}|$ip"
-        }
+        val card = "${identity.nodeId}|${identity.displayName}|${identity.publicKeyBase64}"
         val image = makeQr(card, 720)
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
