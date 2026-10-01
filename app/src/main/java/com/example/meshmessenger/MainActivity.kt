@@ -9,7 +9,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -148,11 +151,47 @@ class MainActivity : ComponentActivity() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
+    private class TronBackgroundView(context: Context) : android.view.View(context) {
+        private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0, 68, 255); strokeWidth = 1f }
+        private val horizonPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0, 240, 255); strokeWidth = 2f }
+        private var offset = 0f
+        private val density = resources.displayMetrics.density
+        private val gridStep get() = 48f * density
+        private val tick = object : Runnable {
+            override fun run() { offset = (offset + 1.2f * density) % gridStep; invalidate(); postDelayed(this, 32L) }
+        }
+        override fun onAttachedToWindow() { super.onAttachedToWindow(); post(tick) }
+        override fun onDetachedFromWindow() { removeCallbacks(tick); super.onDetachedFromWindow() }
+        override fun onDraw(canvas: Canvas) {
+            canvas.drawColor(Color.rgb(2, 8, 19))
+            val w = width.toFloat(); val h = height.toFloat(); val horizon = h * 0.38f
+            val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(42, 0, 240, 255) }
+            canvas.drawRect(0f, 0f, w, horizon, glow)
+            horizonPaint.alpha = 150
+            canvas.drawLine(0f, horizon, w, horizon, horizonPaint)
+            var x = -w
+            while (x < w * 2f) {
+                val dx = x - w / 2f
+                canvas.drawLine(w / 2f + dx * 0.12f, horizon, x, h, gridPaint)
+                x += gridStep
+            }
+            var y = horizon + offset
+            while (y < h) {
+                val p = ((y - horizon) / (h - horizon)).coerceIn(0f, 1f)
+                gridPaint.alpha = (25 + p * 90).toInt()
+                canvas.drawLine(0f, y, w, y, gridPaint)
+                y += gridStep * (0.55f + p * 0.75f)
+            }
+        }
+    }
+
     private fun homeText(textValue: String, size: Float = 16f): TextView =
         TextView(this).apply {
             text = textValue
             textSize = size
-            setTextColor(Color.rgb(210, 226, 255))
+            typeface = Typeface.create("monospace", Typeface.NORMAL)
+            setTextColor(Color.rgb(190, 235, 245))
+            setShadowLayer(dp(4).toFloat(), 0f, 0f, Color.rgb(0, 150, 180))
             setPadding(0, dp(5), 0, dp(5))
         }
 
@@ -160,7 +199,8 @@ class MainActivity : ComponentActivity() {
         Button(this).apply {
             text = label
             textSize = 15f
-            setTextColor(Color.rgb(211, 229, 255))
+            typeface = Typeface.create("monospace", Typeface.BOLD)
+            setTextColor(Color.rgb(0, 240, 255))
             isAllCaps = false
             gravity = android.view.Gravity.CENTER
             minHeight = dp(56)
@@ -179,22 +219,33 @@ class MainActivity : ComponentActivity() {
 
     private fun buildHome() {
         val scroll = ScrollView(this).apply {
-            setBackgroundColor(Color.rgb(5, 11, 22))
             isFillViewport = true
+            setBackgroundColor(Color.TRANSPARENT)
         }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(10), dp(16), dp(18))
+            setPadding(dp(18), dp(14), dp(18), dp(22))
         }
         scroll.addView(root)
+        val background = FrameLayout(this).apply {
+            setBackgroundColor(Color.rgb(2, 8, 19))
+            addView(TronBackgroundView(this@MainActivity), FrameLayout.LayoutParams(-1, -1))
+            addView(scroll, FrameLayout.LayoutParams(-1, -1))
+        }
 
         status = TextView(this).apply {
             textSize = 22f
-            setTextColor(Color.rgb(211, 229, 255))
+            typeface = Typeface.create("monospace", Typeface.BOLD)
+            setTextColor(Color.rgb(0, 240, 255))
+            setShadowLayer(dp(10).toFloat(), 0f, 0f, Color.rgb(0, 180, 255))
             setPadding(dp(8), dp(8), dp(8), dp(4))
         }
         root.addView(status)
-        root.addView(homeText("Мой Node ID: ${identity.nodeId}", 16f))
+        root.addView(homeText("Мой Node ID: ${identity.nodeId}", 14f).apply {
+            typeface = Typeface.create("monospace", Typeface.NORMAL)
+            setTextColor(Color.WHITE)
+            setShadowLayer(dp(6).toFloat(), 0f, 0f, Color.rgb(0, 240, 255))
+        })
 
         root.addView(Button(this).apply {
             text = "ИМЯ: ${identity.displayName}"
@@ -292,8 +343,8 @@ class MainActivity : ComponentActivity() {
             setPadding(0, dp(12), 0, dp(8))
         })
 
-        setContentView(scroll)
-        status.text = if (meshActive) "Mesh активен" else "Mesh выключен"
+        setContentView(background)
+        status.text = if (meshActive) "MESH АКТИВЕН" else "MESH ВЫКЛЮЧЕН"
         updateNetBirdStatus()
     }
 
