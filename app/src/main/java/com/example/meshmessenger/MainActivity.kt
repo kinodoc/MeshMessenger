@@ -95,7 +95,8 @@ class MainActivity : ComponentActivity() {
 
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         if (result.values.all { it }) {
-            startRuntimeNotification()
+            // ACTION_START creates the foreground service when needed; sending APP_START
+            // first caused a duplicate mesh-start request during permission completion.
             startMeshIfAllowed()
         } else {
             status.text = "Не все разрешения предоставлены"
