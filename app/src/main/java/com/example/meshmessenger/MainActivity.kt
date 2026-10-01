@@ -73,7 +73,7 @@ class MainActivity : ComponentActivity() {
         meshButton.isEnabled = false
         meshButton.text = if (targetActive) "MESH ЗАПУСКАЕТСЯ…" else "MESH ОСТАНАВЛИВАЕТСЯ…"
         meshActionHandler.removeCallbacks(meshActionTimeout)
-        meshActionHandler.postDelayed(meshActionTimeout, 10_000L)
+        meshActionHandler.postDelayed(meshActionTimeout, 35_000L)
     }
     private var connectionStatusView: TextView? = null
     // Refresh the visible chat when a message arrives while its dialog is already open.

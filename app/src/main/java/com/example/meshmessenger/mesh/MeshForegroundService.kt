@@ -82,13 +82,16 @@ class MeshForegroundService : Service() {
                 } else if (node == null) {
                     diagnostics.event("BLE_WATCHDOG", "node_missing_restart")
                     startMesh(startBle = true)
-                } else if (System.currentTimeMillis() - nodeStartedAtMs >= 30_000L && node?.isHealthy() != true) {
+                } else if (node?.isHealthy() == true) {
+                    sendMeshStatus(true)
+                } else if (System.currentTimeMillis() - nodeStartedAtMs >= 30_000L) {
                     diagnostics.event("BLE_WATCHDOG", "node_unhealthy_restart")
                     node?.stop()
                     node = null
                     startMesh(startBle = true)
                 } else {
-                    sendMeshStatus(node?.isHealthy() == true)
+                    diagnostics.event("BLE_WATCHDOG", "node_initializing")
+                    updateNotification("Mesh запускается…")
                 }
             } else {
                 sendMeshStatus(false)
@@ -147,12 +150,15 @@ class MeshForegroundService : Service() {
 
             ACTION_APP_START -> {
                 updateNotification("Mesh Messenger работает")
-                if (meshEnabled && node == null) startMesh(startBle = true)
-                else sendMeshStatus(node?.isHealthy() == true)
+                if (meshEnabled && (node == null || node?.isHealthy() != true)) startMesh(startBle = true)
+                else if (node?.isHealthy() == true) sendMeshStatus(true)
+                else sendMeshStatus(false)
             }
 
             ACTION_MESH_STATUS_REQUEST -> {
-                sendMeshStatus(node?.isHealthy() == true)
+                if (node?.isHealthy() == true) sendMeshStatus(true)
+                else if (!meshEnabled) sendMeshStatus(false)
+                // While enabled but initializing, do not publish a false/off state.
                 // MainActivity registers its peer-status receiver on every start;
                 // replay current channel counts so the UI does not default to disconnected.
                 blePeerCount = node?.onlinePeerCount() ?: 0
@@ -208,7 +214,7 @@ class MeshForegroundService : Service() {
                 return
             }
             if (System.currentTimeMillis() - nodeStartedAtMs < 30_000L) {
-                sendMeshStatus(false)
+                diagnostics.event("BLE_START", "already_initializing")
                 return
             }
             diagnostics.event("BLE_WATCHDOG", "replacing_unhealthy_node")
@@ -313,8 +319,10 @@ class MeshForegroundService : Service() {
         }
 
         val active = node?.isHealthy() == true
-        updateNotification(if (active) "Mesh работает" else "Mesh запускается / требуется проверка")
-        sendMeshStatus(active)
+        updateNotification(if (active) "Mesh работает" else "Mesh запускается…")
+        // BLE GATT registration, advertising and scanning finish asynchronously.
+        // Do not reset the UI to off while initialization is still in progress.
+        if (active) sendMeshStatus(true)
     }
 
 
