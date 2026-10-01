@@ -200,7 +200,7 @@ class MeshRelayTransport(
         return runCatching {
             writeExecutor.execute {
                 synchronized(writeLock) {
-                    if (writer !== out || out.isClosed) return@synchronized
+                    if (writer !== out) return@synchronized
                     try {
                         out.write(obj.toString())
                         out.newLine()
