@@ -153,6 +153,10 @@ class MeshForegroundService : Service() {
 
             ACTION_MESH_STATUS_REQUEST -> {
                 sendMeshStatus(node?.isHealthy() == true)
+                // MainActivity registers its peer-status receiver on every start;
+                // replay current channel counts so the UI does not default to disconnected.
+                blePeerCount = node?.onlinePeerCount() ?: 0
+                sendPeerStatus()
             }
 
             ACTION_START -> {
