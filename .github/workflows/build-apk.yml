@@ -67,6 +67,11 @@ jobs:
         run: |
           VERSION_NAME="${{ steps.version.outputs.version_name }}"
           APK="app/build/outputs/apk/debug/MeshMessenger-v$VERSION_NAME.apk"
-          gh release create "v$VERSION_NAME" "$APK" \
-            --title "MeshMessenger v$VERSION_NAME" \
-            --generate-notes
+          TAG="v$VERSION_NAME"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --clobber
+          else
+            gh release create "$TAG" "$APK" \
+              --title "MeshMessenger v$VERSION_NAME" \
+              --generate-notes
+          fi
