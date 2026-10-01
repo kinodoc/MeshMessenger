@@ -705,28 +705,30 @@ class MainActivity : ComponentActivity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(18, 12, 18, 12)
-            setBackgroundColor(0xFF05080D.toInt())
+            setPadding(dp(18), dp(14), dp(18), dp(12))
+            setBackgroundColor(Color.TRANSPARENT)
         }
 
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(8, 8, 8, 14)
-            setBackgroundColor(0xFF0A111A.toInt())
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_home_card)
         }
 
         val title = TextView(this).apply {
             text = contact.name
             textSize = 21f
-            setTextColor(0xFF00E5FF.toInt())
+            setTextColor(Color.rgb(0, 240, 255))
+            setShadowLayer(dp(5).toFloat(), 0f, 0f, Color.rgb(0, 150, 180))
             setTypeface(null, android.graphics.Typeface.BOLD)
         }
 
         val nodeInfo = TextView(this).apply {
             text = "NODE ${contact.nodeId.take(16)}"
-            textSize = 11f
-            setTextColor(0xFF6B8799.toInt())
-            setPadding(0, 4, 0, 0)
+            textSize = 12f
+            typeface = Typeface.create("monospace", Typeface.NORMAL)
+            setTextColor(0xFF8AA7B8.toInt())
+            setPadding(0, dp(5), 0, 0)
         }
 
         connectionStatusView = TextView(this).apply {
@@ -743,11 +745,12 @@ class MainActivity : ComponentActivity() {
 
         val history = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(12, 14, 12, 14)
+            setPadding(dp(4), dp(14), dp(4), dp(14))
         }
 
         val scroll = ScrollView(this).apply {
-            setBackgroundColor(0xFF05080D.toInt())
+            setBackgroundColor(Color.TRANSPARENT)
+            clipToPadding = false
             addView(history)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -759,8 +762,8 @@ class MainActivity : ComponentActivity() {
         val inputRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = android.view.Gravity.CENTER_VERTICAL
-            setPadding(6, 10, 6, 6)
-            setBackgroundColor(0xFF0A111A.toInt())
+            setPadding(dp(6), dp(10), dp(6), dp(6))
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_home_card)
         }
 
         val input = EditText(this).apply {
@@ -770,8 +773,12 @@ class MainActivity : ComponentActivity() {
             textSize = 15f
             setSingleLine(false)
             maxLines = 4
-            setPadding(16, 10, 16, 10)
-            setBackgroundColor(0xFF101B26.toInt())
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(10).toFloat()
+                setColor(0xFF07131F.toInt())
+                setStroke(dp(1), 0xFF164B61.toInt())
+            }
             layoutParams = LinearLayout.LayoutParams(
                 0,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -785,9 +792,13 @@ class MainActivity : ComponentActivity() {
             text = "➤"
             textSize = 22f
             setTextColor(0xFF00E5FF.toInt())
-            setBackgroundColor(0xFF0D202B.toInt())
-            minWidth = 58
-            minHeight = 58
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(0xFF0D202B.toInt())
+                setStroke(dp(1), 0xFF087E99.toInt())
+            }
+            minWidth = dp(58)
+            minHeight = dp(58)
         }
 
         inputRow.addView(input)
@@ -800,17 +811,27 @@ class MainActivity : ComponentActivity() {
                 val row = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = if (message.mine) android.view.Gravity.END else android.view.Gravity.START
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = dp(8) }
                 }
                 val bubble = TextView(this).apply {
                     text = if (message.mine) android.text.SpannableStringBuilder().apply { append(message.text); append("  "); val start = length; append(when (message.delivery) { ChatStore.Delivery.DELIVERED, ChatStore.Delivery.SENT -> "➤"; ChatStore.Delivery.WAITING -> "◷"; ChatStore.Delivery.NOT_SENT -> "×" }); setSpan(android.text.style.ForegroundColorSpan(when (message.delivery) { ChatStore.Delivery.DELIVERED, ChatStore.Delivery.SENT -> 0xFFFF9800.toInt(); ChatStore.Delivery.WAITING -> 0xFF6B8799.toInt(); ChatStore.Delivery.NOT_SENT -> 0xFFFF5555.toInt() }), start, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) } else message.text
                     textSize = 16f
                     setTextColor(0xFFE7F7FF.toInt())
-                    setPadding(18, 12, 18, 12)
+                    setPadding(dp(14), dp(11), dp(14), dp(11))
+                    maxWidth = (resources.displayMetrics.widthPixels * 0.80f).toInt()
+                    setLineSpacing(dp(2).toFloat(), 1.0f)
                     background = android.graphics.drawable.GradientDrawable().apply {
-                        cornerRadius = 18f
+                        cornerRadius = dp(16).toFloat()
                         setColor(if (message.mine) 0xFF082B38.toInt() else 0xFF122333.toInt())
-                        setStroke(1, if (message.mine) 0xFF00D9FF.toInt() else 0xFF234B66.toInt())
+                        setStroke(dp(1), if (message.mine) 0xFF00D9FF.toInt() else 0xFF234B66.toInt())
                     }
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    )
                 }
                 row.addView(bubble)
                 history.addView(row)
@@ -873,9 +894,15 @@ class MainActivity : ComponentActivity() {
         ))
         root.addView(inputRow)
 
+        val chatFrame = FrameLayout(this).apply {
+            setBackgroundColor(Color.rgb(2, 8, 19))
+            addView(TronBackgroundView(this@MainActivity), FrameLayout.LayoutParams(-1, -1))
+            addView(root, FrameLayout.LayoutParams(-1, -1))
+        }
+
         val dialog = android.app.Dialog(this)
         dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
-        dialog.setContentView(root)
+        dialog.setContentView(chatFrame)
         dialog.setCanceledOnTouchOutside(false)
         dialog.setOnDismissListener {
             if (selected?.nodeId == contact.nodeId) refreshOpenChat = null
