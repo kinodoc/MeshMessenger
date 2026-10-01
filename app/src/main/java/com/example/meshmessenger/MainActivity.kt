@@ -974,6 +974,7 @@ class MainActivity : ComponentActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != MeshForegroundService.ACTION_MESH_DELIVERED) return
             val packetId = intent.getStringExtra(MeshForegroundService.EXTRA_DELIVERED_PACKET_ID) ?: return
+            android.util.Log.i("MeshGattDiag", "ui_delivery_status packetId=$packetId")
             chats.updateDelivery(packetId, ChatStore.Delivery.DELIVERED)
             refreshOpenChat?.invoke()
             log.text = "➤ Доставлено: получатель подтвердил сообщение"

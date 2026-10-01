@@ -504,13 +504,19 @@ class MeshGattNode(
             val text = router.decryptForLocal(packet) ?: "[не удалось расшифровать]"
             if (text.startsWith(MeshRouter.DELIVERY_ACK_PREFIX)) {
                 val deliveredId = text.removePrefix(MeshRouter.DELIVERY_ACK_PREFIX)
+                Log.i(TAG, "delivery_ack_received ackPacket=${packet.messageId} deliveredId=$deliveredId src=${packet.sourceId.take(8)}")
                 markDelivered(deliveredId)
                 onDeliveryAck(deliveredId)
             } else {
                 Log.d(TAG, "message_delivered_to_callback id=${packet.messageId} src=${packet.sourceId.take(8)} textBytes=${text.toByteArray(StandardCharsets.UTF_8).size}")
                 onMessage(text, packet.sourceId, packet)
-                val ack = runCatching { router.createDeliveryAck(packet) }.getOrNull()
-                if (ack != null) broadcast(ack.encode())
+                val ack = runCatching { router.createDeliveryAck(packet) }.onFailure {
+                    Log.e(TAG, "delivery_ack_create_failed for=${packet.messageId}", it)
+                }.getOrNull()
+                if (ack != null) {
+                    Log.i(TAG, "delivery_ack_created for=${packet.messageId} ack=${ack.messageId} peers=${peerCount()} serverClients=${serverClients.size} ready=${notifyReady.size}")
+                    broadcast(ack.encode())
+                }
             }
             queue.remove(packet.messageId)
         } else if (next != null) {

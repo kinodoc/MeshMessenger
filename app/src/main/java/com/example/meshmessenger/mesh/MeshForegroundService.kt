@@ -371,6 +371,7 @@ class MeshForegroundService : Service() {
     }
 
     private fun sendDeliveryStatus(packetId: String) {
+        android.util.Log.i("MeshGattDiag", "delivery_status_broadcast packetId=$packetId")
         if (packetId.isBlank()) return
         runCatching {
             val id = java.util.UUID.fromString(packetId)
