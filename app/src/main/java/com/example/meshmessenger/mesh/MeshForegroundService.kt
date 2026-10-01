@@ -60,7 +60,6 @@ class MeshForegroundService : Service() {
     private var meshEnabled = false
     private var ipTransport: MeshIpTransport? = null
     private var netBirdGuard: NetBirdGuard? = null
-    private var discovery: MeshDiscovery? = null
     private lateinit var pendingIp: PendingIpMessageStore
     private lateinit var contacts: ContactStore
     private lateinit var chats: ChatStore
@@ -206,16 +205,30 @@ class MeshForegroundService : Service() {
 
         netBirdGuard = netBirdGuard ?: NetBirdGuard(this)
 
-        if (discovery == null) runCatching {
-            discovery = MeshDiscovery(
+        if (ipTransport == null) runCatching {
+            ipTransport = MeshIpTransport(
                 localId = identity.nodeId,
                 localName = identity.displayName,
                 publicKey = identity.keyPair.public.encoded,
+                router = router,
+                queue = queue,
+                guard = netBirdGuard!!,
+                onStatus = { updateNotification(it) },
+                onMessage = { text, sourceId, packet, remoteIp ->
+                    rememberPeer(packet, remoteIp)
+                    handleIncomingPersisted(text, sourceId, packet.messageId.toString(), ACTION_IP_MESSAGE)
+                },
+                onDeliveryAck = { packetId -> sendDeliveryStatus(packetId) },
+                knownTargets = {
+                    contacts.all().mapNotNull { contact ->
+                        contact.netBirdIp.trim().takeIf { it.isNotBlank() }?.let {
+                            runCatching { InetAddress.getByName(it) }.getOrNull()
+                        }
+                    }
+                },
                 onPeer = { nodeId, name, publicKey, ip ->
                     val key = android.util.Base64.encodeToString(publicKey, android.util.Base64.NO_WRAP)
                     val current = contacts.get(nodeId)
-                    // Discovery may arrive over Wi-Fi/LAN. Never overwrite a known
-                    // NetBird address with a LAN address such as 192.168.x.x.
                     val discoveredNetBirdIp = ip.takeIf { candidate ->
                         runCatching {
                             netBirdGuard?.isNetBirdAddress(InetAddress.getByName(candidate)) == true
@@ -231,40 +244,10 @@ class MeshForegroundService : Service() {
                         )
                     )
                 },
-                onCount = { count ->
+                onPeerCount = { count ->
                     netBirdPeerCount = count
                     sendPeerStatus()
-                },
-                onStatus = { updateNotification(it) },
-                netBirdNetwork = { netBirdGuard?.netBirdNetwork() },
-                netBirdTargets = {
-                    val stored = contacts.all().mapNotNull { contact ->
-                        contact.netBirdIp.trim().takeIf { it.isNotBlank() }?.let {
-                            runCatching { InetAddress.getByName(it) }.getOrNull()
-                        }
-                    }
-                    (stored + netBirdGuard?.netBirdDiscoveryTargets().orEmpty())
-                        .filter { it is java.net.Inet4Address }
-                        .distinctBy { it.hostAddress }
                 }
-            ).also { it.start() }
-        }.onFailure {
-            discovery = null
-            android.util.Log.e("MeshMessenger", "Discovery start failed", it)
-        }
-
-        if (ipTransport == null) runCatching {
-            ipTransport = MeshIpTransport(
-                localId = identity.nodeId,
-                router = router,
-                queue = queue,
-                guard = netBirdGuard!!,
-                onStatus = { updateNotification(it) },
-                onMessage = { text, sourceId, packet, remoteIp ->
-                    rememberPeer(packet, remoteIp)
-                    handleIncomingPersisted(text, sourceId, packet.messageId.toString(), ACTION_IP_MESSAGE)
-                },
-                onDeliveryAck = { packetId -> sendDeliveryStatus(packetId) }
             ).also {
                 it.start()
             }
@@ -444,8 +427,6 @@ class MeshForegroundService : Service() {
         retryHandler.removeCallbacks(retryRunnable)
         ipTransport?.stop()
         ipTransport = null
-        discovery?.stop()
-        discovery = null
         netBirdGuard = null
         netBirdPeerCount = 0
         sendPeerStatus()

@@ -21,6 +21,11 @@ import java.net.NetworkInterface
 class NetBirdGuard(private val context: Context) {
 
     companion object {
+        // Requested Mesh policy range. Keep the current NetBird CGNAT range
+        // as a compatibility range: this installation currently uses 100.118.x.x,
+        // which is outside literal 100.0.0.0/16.
+        private const val REQUESTED_NETBIRD_FIRST_OCTET = 100
+        private const val REQUESTED_NETBIRD_SECOND_OCTET = 0
         private const val PREFS = "netbird_policy"
         private const val KEY_ONLY = "netbird_only"
 
@@ -59,7 +64,7 @@ class NetBirdGuard(private val context: Context) {
             return Status.CONNECTED
         }
 
-        // 2. NetBird обычно использует адреса CGNAT 100.64.0.0/10.
+        // 2. Проверяем запрошенный 100.0.0.0/16 и текущий NetBird 100.64.0.0/10.
         val netBirdAddress = interfaces.any { iface ->
             runCatching {
                 if (!iface.isUp || iface.isLoopback) {
@@ -132,7 +137,7 @@ class NetBirdGuard(private val context: Context) {
         }
 
         // Prefer a VPN network whose LinkProperties explicitly exposes the
-        // NetBird 100.64/10 address. Some Android VPN implementations do not
+        // NetBird address. Some Android VPN implementations do not
         // mirror the tunnel address into LinkProperties, so keep a fallback
         // when there is exactly one VPN and the OS network interfaces show a
         // NetBird address.
@@ -221,8 +226,11 @@ class NetBirdGuard(private val context: Context) {
         val a = bytes[0].toInt() and 0xff
         val b = bytes[1].toInt() and 0xff
 
-        // 100.64.0.0/10 = 100.64.x.x ... 100.127.x.x
-        return a == 100 && b in 64..127
+        // Requested 100.0.0.0/16 compatibility plus the actual NetBird
+        // 100.64.0.0/10 range used by the current network (100.118.x.x).
+        return (a == REQUESTED_NETBIRD_FIRST_OCTET &&
+            b == REQUESTED_NETBIRD_SECOND_OCTET) ||
+            (a == 100 && b in 64..127)
     }
 
     enum class Status {
