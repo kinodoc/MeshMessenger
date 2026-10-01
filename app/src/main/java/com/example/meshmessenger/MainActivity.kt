@@ -66,6 +66,8 @@ class MainActivity : ComponentActivity() {
     private var meshActive = false
     private lateinit var meshButton: Button
     private var connectionStatusView: TextView? = null
+    // Refresh the visible chat when a message arrives while its dialog is already open.
+    private var refreshOpenChat: (() -> Unit)? = null
     private val contactStatusHandler = Handler(Looper.getMainLooper())
     private val contactStatusRunnable = object : Runnable {
         override fun run() {
@@ -526,6 +528,10 @@ class MainActivity : ComponentActivity() {
     }
     private fun handleIncoming(text: String, sourceId: String, packetId: String = "") {
         chats.addIncomingIfAbsent(sourceId, text, packetId)
+        // The service persists incoming messages before broadcasting them. Refresh the
+        // current conversation immediately; otherwise the saved message may remain
+        // invisible until the user closes and reopens the chat.
+        if (selected?.nodeId == sourceId) refreshOpenChat?.invoke()
         val contact = contacts.all().firstOrNull { it.nodeId == sourceId }
         log.text = if (contact != null) {
             "Получено от ${contact.name}: $text"
@@ -857,6 +863,8 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        refreshOpenChat = { if (selected?.nodeId == contact.nodeId) refresh() }
+
         root.addView(header)
         root.addView(scroll, android.widget.LinearLayout.LayoutParams(
             android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
@@ -869,6 +877,9 @@ class MainActivity : ComponentActivity() {
         dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
         dialog.setContentView(root)
         dialog.setCanceledOnTouchOutside(false)
+        dialog.setOnDismissListener {
+            if (selected?.nodeId == contact.nodeId) refreshOpenChat = null
+        }
         dialog.setOnShowListener {
             dialog.window?.setBackgroundDrawable(
                 android.graphics.drawable.ColorDrawable(0xFF05080D.toInt())
@@ -964,6 +975,7 @@ class MainActivity : ComponentActivity() {
             if (intent?.action != MeshForegroundService.ACTION_MESH_DELIVERED) return
             val packetId = intent.getStringExtra(MeshForegroundService.EXTRA_DELIVERED_PACKET_ID) ?: return
             chats.updateDelivery(packetId, ChatStore.Delivery.DELIVERED)
+            refreshOpenChat?.invoke()
             log.text = "➤ Доставлено: получатель подтвердил сообщение"
         }
     }
@@ -977,6 +989,7 @@ class MainActivity : ComponentActivity() {
 
             if (!success) {
                 chats.updateDelivery(packetId, ChatStore.Delivery.NOT_SENT)
+                refreshOpenChat?.invoke()
                 log.text = "⚠ Не отправлено: внутренняя сеть недоступна"
             } else {
                 log.text = "◷ Доставляется через внутреннюю сеть"
