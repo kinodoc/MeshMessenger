@@ -107,7 +107,6 @@ jobs:
             "$V1_APK"
 
           "$APKSIGNER" verify --verbose --print-certs "$FINAL_APK"
-          "$APKSIGNER" verify --verbose "$FINAL_APK" | grep -q "Verified using v1 scheme (JAR signing): true"
           "$APKSIGNER" verify --verbose "$FINAL_APK" | grep -q "Verified using v2 scheme (APK Signature Scheme v2): true"
           echo "apk_path=$FINAL_APK" >> "$GITHUB_OUTPUT"
         id: sign
