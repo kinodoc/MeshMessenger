@@ -159,8 +159,12 @@ class MeshIpTransport(
         val entries = queue.snapshot()
         for (entry in entries) {
             val packet = MeshPacket.decode(entry.bytes) ?: continue
-            val targetIp = peerIps[packet.destinationId] ?: continue
-            send(packet, targetIp)
+            val directTarget = peerIps[packet.destinationId]
+            if (directTarget != null) {
+                send(packet, directTarget)
+            } else {
+                relayToKnownPeers(packet, excludedIp = null)
+            }
         }
     }
 
@@ -238,8 +242,27 @@ class MeshIpTransport(
                 onStatus("IP: получено сообщение")
             } else if (next != null) {
                 queue.enqueue(next)
+                relayToKnownPeers(next, remote.hostAddress)
                 onStatus("IP: получен транзитный пакет")
             }
+        }
+    }
+
+    /**
+     * Forward a relay packet to a small fan-out of currently known peers.
+     * The packet remains durable until the destination sends its delivery ACK.
+     * SeenMessageStore on each node prevents loops and duplicate processing.
+     */
+    private fun relayToKnownPeers(packet: MeshPacket, excludedIp: String?) {
+        if (packet.ttl <= 0) return
+        val targets = peerIps.values
+            .asSequence()
+            .filter { it.isNotBlank() && it != excludedIp }
+            .distinct()
+            .take(4)
+            .toList()
+        targets.forEach { target ->
+            executor.execute { send(packet, target) }
         }
     }
 
