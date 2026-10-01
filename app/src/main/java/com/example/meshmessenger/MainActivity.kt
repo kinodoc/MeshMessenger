@@ -154,36 +154,60 @@ class MainActivity : ComponentActivity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private class TronBackgroundView(context: Context) : android.view.View(context) {
-        private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0, 68, 255); strokeWidth = 1f }
-        private val horizonPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0, 240, 255); strokeWidth = 2f }
+        private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(0, 92, 255)
+            strokeWidth = 1f
+            style = Paint.Style.STROKE
+        }
+        private val horizonPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(0, 220, 255)
+            strokeWidth = 1.5f
+        }
+        private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(20, 0, 150, 255) }
         private var offset = 0f
         private val density = resources.displayMetrics.density
-        private val gridStep get() = 48f * density
+        private val gridStep get() = 42f * density
         private val tick = object : Runnable {
-            override fun run() { offset = (offset + 1.2f * density) % gridStep; invalidate(); postDelayed(this, 32L) }
+            override fun run() {
+                offset = (offset + 0.7f * density) % gridStep
+                invalidate()
+                postDelayed(this, 40L)
+            }
         }
         override fun onAttachedToWindow() { super.onAttachedToWindow(); post(tick) }
         override fun onDetachedFromWindow() { removeCallbacks(tick); super.onDetachedFromWindow() }
         override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val w = width.toFloat()
+            val h = height.toFloat()
+            if (w <= 0f || h <= 0f) return
+
+            // Keep the grid edge-to-edge: no horizon band or empty upper half.
             canvas.drawColor(Color.rgb(2, 8, 19))
-            val w = width.toFloat(); val h = height.toFloat(); val horizon = h * 0.38f
-            val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(42, 0, 240, 255) }
-            canvas.drawRect(0f, 0f, w, horizon, glow)
-            horizonPaint.alpha = 150
-            canvas.drawLine(0f, horizon, w, horizon, horizonPaint)
-            var x = -w
-            while (x < w * 2f) {
-                val dx = x - w / 2f
-                canvas.drawLine(w / 2f + dx * 0.12f, horizon, x, h, gridPaint)
-                x += gridStep
+            canvas.drawRect(0f, 0f, w, h, glowPaint)
+            val save = canvas.save()
+            canvas.clipRect(0f, 0f, w, h)
+
+            // Full-screen perspective lines converge slightly above the center.
+            val vanishX = w * 0.5f
+            val vanishY = h * 0.30f
+            var bottomX = -w
+            while (bottomX <= w * 2f) {
+                canvas.drawLine(vanishX, vanishY, bottomX, h, gridPaint.apply { alpha = 95 })
+                bottomX += gridStep
             }
-            var y = horizon + offset
+
+            // Horizontal lines cover the whole height, gradually brighter toward the bottom.
+            var y = (vanishY + offset) % gridStep
             while (y < h) {
-                val p = ((y - horizon) / (h - horizon)).coerceIn(0f, 1f)
-                gridPaint.alpha = (25 + p * 90).toInt()
+                val progress = ((y - vanishY) / (h - vanishY)).coerceIn(0f, 1f)
+                gridPaint.alpha = (30 + progress * 95).toInt()
                 canvas.drawLine(0f, y, w, y, gridPaint)
-                y += gridStep * (0.55f + p * 0.75f)
+                y += gridStep
             }
+            horizonPaint.alpha = 75
+            canvas.drawLine(0f, vanishY, w, vanishY, horizonPaint)
+            canvas.restoreToCount(save)
         }
     }
 
