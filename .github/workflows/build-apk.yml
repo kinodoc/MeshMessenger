@@ -79,6 +79,21 @@ jobs:
 
           test -f "$APK"
           "$ZIPALIGN" -f 4 "$APK" "$ALIGNED_APK"
+
+          # Use jarsigner for the legacy JAR/V1 signature, then apksigner for
+          # APK Signature Scheme V2. Keep zipalign before signing so alignment
+          # does not invalidate the JAR signature.
+          V1_APK="$RUNNER_TEMP/mesh-messenger-v1.apk"
+          jarsigner \
+            -keystore "$RELEASE_STORE_FILE" \
+            -storepass "$RELEASE_STORE_PASSWORD" \
+            -keypass "$RELEASE_KEY_PASSWORD" \
+            -sigalg SHA256withRSA \
+            -digestalg SHA-256 \
+            -signedjar "$V1_APK" \
+            "$ALIGNED_APK" \
+            "$RELEASE_KEY_ALIAS"
+
           "$APKSIGNER" sign \
             --ks "$RELEASE_STORE_FILE" \
             --ks-pass env:RELEASE_STORE_PASSWORD \
@@ -89,7 +104,7 @@ jobs:
             --v3-signing-enabled false \
             --v4-signing-enabled false \
             --out "$FINAL_APK" \
-            "$ALIGNED_APK"
+            "$V1_APK"
 
           "$APKSIGNER" verify --verbose --print-certs "$FINAL_APK"
           "$APKSIGNER" verify --verbose "$FINAL_APK" | grep -q "Verified using v1 scheme (JAR signing): true"
