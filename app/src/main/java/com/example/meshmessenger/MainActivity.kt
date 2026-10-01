@@ -164,59 +164,105 @@ class MainActivity : ComponentActivity() {
 
     private class TronBackgroundView(context: Context) : android.view.View(context) {
         private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(0, 92, 255)
+            color = Color.rgb(0, 115, 255)
             strokeWidth = 1f
             style = Paint.Style.STROKE
         }
         private val horizonPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(0, 220, 255)
+            color = Color.rgb(0, 205, 255)
             strokeWidth = 1.5f
         }
-        private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(20, 0, 150, 255) }
-        private var offset = 0f
         private val density = resources.displayMetrics.density
-        private val gridStep get() = 42f * density
+        private var offset = 0f
         private val tick = object : Runnable {
             override fun run() {
-                offset = (offset + 0.7f * density) % gridStep
+                offset = (offset + 0.45f * density) % (18f * density)
                 invalidate()
-                postDelayed(this, 40L)
+                postDelayed(this, 50L)
             }
         }
         override fun onAttachedToWindow() { super.onAttachedToWindow(); post(tick) }
         override fun onDetachedFromWindow() { removeCallbacks(tick); super.onDetachedFromWindow() }
+
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             val w = width.toFloat()
             val h = height.toFloat()
             if (w <= 0f || h <= 0f) return
 
-            // Keep the grid edge-to-edge: no horizon band or empty upper half.
-            canvas.drawColor(Color.rgb(2, 8, 19))
-            canvas.drawRect(0f, 0f, w, h, glowPaint)
+            // Cinematic TRON floor: dark atmospheric sky, bright low horizon,
+            // and a perspective grid confined to the reflective ground plane.
+            canvas.drawColor(Color.rgb(1, 6, 17))
+            val skyGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = android.graphics.RadialGradient(
+                    w * 0.5f, h * 0.48f, w * 0.92f,
+                    intArrayOf(Color.rgb(0, 35, 68), Color.rgb(1, 12, 28), Color.rgb(1, 6, 17)),
+                    floatArrayOf(0f, 0.48f, 1f), android.graphics.Shader.TileMode.CLAMP
+                )
+            }
+            canvas.drawRect(0f, 0f, w, h, skyGlow)
+            val horizonY = h * 0.515f
+            val horizonGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = android.graphics.LinearGradient(
+                    0f, horizonY - 26f * density, 0f, horizonY + 48f * density,
+                    intArrayOf(Color.TRANSPARENT, Color.argb(42, 0, 130, 255), Color.argb(16, 0, 190, 255), Color.TRANSPARENT),
+                    floatArrayOf(0f, 0.42f, 0.58f, 1f), android.graphics.Shader.TileMode.CLAMP
+                )
+            }
+            canvas.drawRect(0f, horizonY - 28f * density, w, horizonY + 52f * density, horizonGlow)
+
             val save = canvas.save()
-            canvas.clipRect(0f, 0f, w, h)
-
-            // Full-screen perspective lines converge slightly above the center.
+            canvas.clipRect(0f, horizonY, w, h)
+            // Long straight rails converge at a single point on the horizon.
             val vanishX = w * 0.5f
-            val vanishY = h * 0.30f
-            var bottomX = -w
-            while (bottomX <= w * 2f) {
-                canvas.drawLine(vanishX, vanishY, bottomX, h, gridPaint.apply { alpha = 95 })
-                bottomX += gridStep
+            var bottomX = -w * 1.7f
+            val railStep = 26f * density
+            while (bottomX <= w * 2.7f) {
+                val rail = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.rgb(0, 126, 255)
+                    strokeWidth = 0.85f * density
+                    alpha = 150
+                }
+                canvas.drawLine(vanishX, horizonY, bottomX, h, rail)
+                bottomX += railStep
             }
 
-            // Horizontal lines cover the whole height, gradually brighter toward the bottom.
-            var y = (vanishY + offset) % gridStep
-            while (y < h) {
-                val progress = ((y - vanishY) / (h - vanishY)).coerceIn(0f, 1f)
-                gridPaint.alpha = (30 + progress * 95).toInt()
-                canvas.drawLine(0f, y, w, y, gridPaint)
-                y += gridStep
+            // Perspective-spaced cross-lines: very tight at the horizon, wider near the viewer.
+            val phase = offset / (18f * density)
+            for (i in 0..22) {
+                val t = (i + phase) / 22f
+                val y = horizonY + (h - horizonY) * t * t
+                if (y < horizonY || y > h) continue
+                val p = ((y - horizonY) / (h - horizonY)).coerceIn(0f, 1f)
+                val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.rgb(0, 157, 255)
+                    strokeWidth = (0.55f + p * 0.65f) * density
+                    alpha = (70 + p * 95).toInt()
+                }
+                canvas.drawLine(0f, y, w, y, line)
             }
-            horizonPaint.alpha = 75
-            canvas.drawLine(0f, vanishY, w, vanishY, horizonPaint)
+            // Subtle luminous reflections on the floor, strongest at the horizon.
+            val floorGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = android.graphics.LinearGradient(
+                    0f, horizonY, 0f, minOf(h, horizonY + 0.23f * h),
+                    intArrayOf(Color.argb(34, 0, 165, 255), Color.TRANSPARENT),
+                    null, android.graphics.Shader.TileMode.CLAMP
+                )
+            }
+            canvas.drawRect(0f, horizonY, w, h, floorGlow)
             canvas.restoreToCount(save)
+
+            // Thin, bright horizon line with a concentrated center light.
+            horizonPaint.alpha = 150
+            canvas.drawLine(0f, horizonY, w, horizonY, horizonPaint)
+            val centerGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = android.graphics.RadialGradient(
+                    w * 0.5f, horizonY, w * 0.24f,
+                    intArrayOf(Color.argb(150, 0, 205, 255), Color.argb(38, 0, 130, 255), Color.TRANSPARENT),
+                    floatArrayOf(0f, 0.22f, 1f), android.graphics.Shader.TileMode.CLAMP
+                )
+            }
+            canvas.drawRect(0f, horizonY - 8f * density, w, horizonY + 14f * density, centerGlow)
         }
     }
 
