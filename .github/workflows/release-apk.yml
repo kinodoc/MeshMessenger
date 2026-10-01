@@ -76,7 +76,13 @@ jobs:
           test -n "$RELEASE_KEY_PASSWORD"
           chmod +x ./gradlew
           ./gradlew --no-daemon :app:assembleRelease
-          cp app/build/outputs/apk/release/app-release.apk "MeshMessenger-$GITHUB_REF_NAME.apk"
+          APK="app/build/outputs/apk/release/app-release.apk"
+          apksigner="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          "$apksigner" sign             --ks "$RELEASE_STORE_FILE"             --ks-pass env:RELEASE_STORE_PASSWORD             --ks-key-alias "$RELEASE_KEY_ALIAS"             --key-pass env:RELEASE_KEY_PASSWORD             --v1-signing-enabled true             --v2-signing-enabled true             --v3-signing-enabled false             --v4-signing-enabled false             "$APK"
+          "$apksigner" verify --verbose "$APK"
+          "$apksigner" verify --verbose "$APK" | grep -q "Verified using v1 scheme (JAR signing): true"
+          "$apksigner" verify --verbose "$APK" | grep -q "Verified using v2 scheme (APK Signature Scheme v2): true"
+          cp "$APK" "MeshMessenger-$GITHUB_REF_NAME.apk"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
