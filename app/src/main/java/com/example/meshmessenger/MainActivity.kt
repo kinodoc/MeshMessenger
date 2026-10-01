@@ -429,16 +429,23 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestMeshPermissions() {
-        if (android.os.Build.VERSION.SDK_INT >= 31) {
-            permissions.launch(arrayOf(
+        val missing = when {
+            android.os.Build.VERSION.SDK_INT >= 31 -> listOf(
                 Manifest.permission.BLUETOOTH_SCAN,
                 Manifest.permission.BLUETOOTH_ADVERTISE,
                 Manifest.permission.BLUETOOTH_CONNECT
-            ))
-        } else if (android.os.Build.VERSION.SDK_INT >= 23) {
-            permissions.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION))
-        } else {
+            ).filter {
+                androidx.core.content.ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+            }
+            android.os.Build.VERSION.SDK_INT >= 23 -> listOf(Manifest.permission.ACCESS_FINE_LOCATION).filter {
+                androidx.core.content.ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+            }
+            else -> emptyList()
+        }
+        if (missing.isEmpty()) {
             startMeshIfAllowed()
+        } else {
+            permissions.launch(missing.toTypedArray())
         }
     }
 
