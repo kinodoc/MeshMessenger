@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
@@ -47,13 +49,24 @@ jobs:
           VERSION_NAME=$(grep -m1 'versionName' app/build.gradle.kts | sed -E 's/.*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
           VERSION_CODE=$(grep -m1 'versionCode' app/build.gradle.kts | sed -E 's/.*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/')
           echo "Building MeshMessenger v$VERSION_NAME ($VERSION_CODE)"
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
           APK=$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n1)
           test -n "$APK"
           cp "$APK" "app/build/outputs/apk/debug/MeshMessenger-v$VERSION_NAME.apk"
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: MeshMessenger-versioned-apk
           path: app/build/outputs/apk/debug/MeshMessenger-v*.apk
           if-no-files-found: error
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION_NAME="${{ steps.version.outputs.version_name }}"
+          APK="app/build/outputs/apk/debug/MeshMessenger-v$VERSION_NAME.apk"
+          gh release create "v$VERSION_NAME" "$APK" \
+            --title "MeshMessenger v$VERSION_NAME" \
+            --generate-notes
