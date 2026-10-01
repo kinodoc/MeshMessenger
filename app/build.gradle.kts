@@ -20,8 +20,8 @@ android {
         applicationId = "com.example.meshmessenger"
         minSdk = 26
         targetSdk = 36
-        versionCode = 52
-        versionName = "0.24.26"
+        versionCode = 53
+        versionName = "0.24.27"
     }
 
     signingConfigs {
@@ -31,7 +31,7 @@ android {
                 storeFile = file(storeFilePath)
                 storePassword = System.getenv("RELEASE_STORE_PASSWORD")
                 keyAlias = System.getenv("RELEASE_KEY_ALIAS")
-                keyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+                keyPassword = System.getenv("RELEASE_STORE_PASSWORD")
                 enableV1Signing = true
                 enableV2Signing = true
             }
