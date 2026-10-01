@@ -589,14 +589,14 @@ class MainActivity : ComponentActivity() {
                 val parts = raw.split("|", limit = 4)
                 val publicKey = parts.getOrNull(2).orEmpty()
                 val netBirdIp = parts.getOrNull(3)?.trim().orEmpty()
-                val validIp = netBirdIp.isNotBlank() && runCatching {
+                val validIp = netBirdIp.isBlank() || runCatching {
                     val address = java.net.InetAddress.getByName(netBirdIp)
                     address is java.net.Inet4Address && netBird.isNetBirdAddress(address)
                 }.getOrDefault(false)
-                if (parts.size == 4 && parts[0].isNotBlank() && publicKey.isNotBlank() && validIp && runCatching { CryptoManager.publicKeyFromBase64(publicKey) }.isSuccess) {
+                if (parts.size in 3..4 && parts[0].isNotBlank() && publicKey.isNotBlank() && validIp && runCatching { CryptoManager.publicKeyFromBase64(publicKey) }.isSuccess) {
                     contacts.upsert(ContactStore.Contact(parts[0], name, publicKey, netBirdIp))
-                    log.text = "Контакт добавлен: $name • внутренняя сеть: $netBirdIp"
-                } else log.text = "Неверная QR-карточка. Используй строку NodeID|имя|publicKey|NetBirdIP"
+                    log.text = if (netBirdIp.isBlank()) "Контакт добавлен: $name • можно искать связь по BLE" else "Контакт добавлен: $name • внутренняя сеть: $netBirdIp"
+                } else log.text = "Неверная QR-карточка. Формат: NodeID|имя|publicKey и необязательно |IP внутренней сети"
             }.setNegativeButton("Отмена", null).show()
     }
 
@@ -1027,17 +1027,12 @@ class MainActivity : ComponentActivity() {
 
 
     private fun showOwnQr() {
-        val ip = netBird.localNetBirdIp()
-        if (ip.isNullOrBlank()) {
-            android.app.AlertDialog.Builder(this)
-                .setTitle("Внутренняя сеть")
-                .setMessage("Нельзя создать контактную карточку: устройство не подключено к внутренней сети.")
-                .setPositiveButton("ОК", null)
-                .show()
-            return
+        val ip = netBird.localNetBirdIp().orEmpty()
+        val card = if (ip.isBlank()) {
+            "${identity.nodeId}|${identity.displayName}|${identity.publicKeyBase64}"
+        } else {
+            "${identity.nodeId}|${identity.displayName}|${identity.publicKeyBase64}|$ip"
         }
-
-        val card = "${identity.nodeId}|${identity.displayName}|${identity.publicKeyBase64}|$ip"
         val image = makeQr(card, 720)
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
