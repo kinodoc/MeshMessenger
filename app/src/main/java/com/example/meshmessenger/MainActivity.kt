@@ -108,6 +108,8 @@ class MainActivity : ComponentActivity() {
         pendingOutbox = PendingMessageStore(this)
         netBird = NetBirdGuard(this)
         updater = UpdateManager(this)
+        // log must exist before buildHome(): setting the network switch can invoke its listener.
+        log = TextView(this)
         buildHome()
         requestNotificationPermission()
         requestBluetoothPermissionsIfNeeded()
@@ -166,7 +168,9 @@ class MainActivity : ComponentActivity() {
             background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_home_button)
             setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0)
             compoundDrawablePadding = dp(14)
-            setPadding(dp(14), dp(8), dp(14), dp(8))
+            // Keep the label itself centered on the screen; the icon is visually pinned to the left.
+            val iconWidth = compoundDrawables[0]?.intrinsicWidth?.coerceAtLeast(0) ?: 0
+            setPadding(dp(14), dp(8), dp(14) + iconWidth + dp(14), dp(8))
             setOnClickListener { onClick() }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(56)
@@ -201,7 +205,8 @@ class MainActivity : ComponentActivity() {
             background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_name)
             setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_person, 0, 0, 0)
             compoundDrawablePadding = dp(12)
-            setPadding(dp(16), dp(5), dp(16), dp(5))
+            val iconWidth = compoundDrawables[0]?.intrinsicWidth?.coerceAtLeast(0) ?: 0
+            setPadding(dp(16), dp(5), dp(16) + iconWidth + dp(12), dp(5))
             minHeight = dp(54)
             setOnClickListener { editOwnName() }
             layoutParams = LinearLayout.LayoutParams(
