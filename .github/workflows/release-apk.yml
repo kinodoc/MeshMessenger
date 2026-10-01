@@ -74,25 +74,16 @@ jobs:
           ./gradlew --no-daemon :app:assembleRelease
 
           APK="app/build/outputs/apk/release/app-release-unsigned.apk"
-          V1_APK="$RUNNER_TEMP/mesh-messenger-v1.apk"
           ALIGNED_APK="$RUNNER_TEMP/mesh-messenger-aligned.apk"
           FINAL_APK="MeshMessenger-$GITHUB_REF_NAME.apk"
           APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
           ZIPALIGN="$ANDROID_HOME/build-tools/36.0.0/zipalign"
 
-          rm -f "$V1_APK" "$ALIGNED_APK" "$FINAL_APK"
+          rm -f "$ALIGNED_APK" "$FINAL_APK"
 
-          jarsigner \
-            -keystore "$RELEASE_STORE_FILE" \
-            -storepass "$RELEASE_STORE_PASSWORD" \
-            -keypass "$RELEASE_KEY_PASSWORD" \
-            -sigalg SHA256withRSA \
-            -digestalg SHA-256 \
-            -signedjar "$V1_APK" \
-            "$APK" \
-            "$RELEASE_KEY_ALIAS"
-
-          "$ZIPALIGN" -f 4 "$V1_APK" "$ALIGNED_APK"
+          # APKs must be zip-aligned before signing. Signing after alignment
+          # lets apksigner generate valid v1 and v2 signatures together.
+          "$ZIPALIGN" -f 4 "$APK" "$ALIGNED_APK"
 
           "$APKSIGNER" sign \
             --ks "$RELEASE_STORE_FILE" \
