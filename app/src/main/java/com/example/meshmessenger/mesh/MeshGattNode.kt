@@ -675,7 +675,9 @@ class MeshGattNode(
 
     @SuppressLint("MissingPermission")
     private fun flushPeerQueue(address: String) {
-        if (writing.contains(address)) return
+        // GATT permits only one outstanding write per connection. HELLO uses the same
+        // RX characteristic, so never start a packet write until its callback completes.
+        if (writing.contains(address) || helloWriting.contains(address)) return
         val gatt = peers[address] ?: return
         if (!notifyReady.contains(address)) return
         val task = writeQueues[address]?.firstOrNull() ?: return
