@@ -60,29 +60,55 @@ jobs:
         run: |
           test -n "$RELEASE_STORE_PASSWORD"
           test -n "$RELEASE_KEY_ALIAS"
-          test -n "$RELEASE_KEY_PASSWORD"
           keytool -list -keystore "$KEYSTORE_FILE" -storepass "$RELEASE_STORE_PASSWORD" -alias "$RELEASE_KEY_ALIAS" -keypass "$RELEASE_KEY_PASSWORD" >/dev/null
           echo "Signing credentials are valid."
-
-      - name: Build signed release APK
+      - name: Build and sign release APK
         env:
           RELEASE_STORE_FILE: ${{ runner.temp }}/mesh-messenger-release.jks
           RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
         run: |
-          test -n "$RELEASE_STORE_PASSWORD"
-          test -n "$RELEASE_KEY_ALIAS"
-          test -n "$RELEASE_KEY_PASSWORD"
+          set -euo pipefail
           chmod +x ./gradlew
           ./gradlew --no-daemon :app:assembleRelease
+
           APK="app/build/outputs/apk/release/app-release.apk"
-          apksigner="$ANDROID_HOME/build-tools/36.0.0/apksigner"
-          "$apksigner" sign             --ks "$RELEASE_STORE_FILE"             --ks-pass env:RELEASE_STORE_PASSWORD             --ks-key-alias "$RELEASE_KEY_ALIAS"             --key-pass env:RELEASE_KEY_PASSWORD             --v1-signing-enabled true             --v2-signing-enabled true             --v3-signing-enabled false             --v4-signing-enabled false             "$APK"
-          "$apksigner" verify --verbose "$APK"
-          "$apksigner" verify --verbose "$APK" | grep -q "Verified using v1 scheme (JAR signing): true"
-          "$apksigner" verify --verbose "$APK" | grep -q "Verified using v2 scheme (APK Signature Scheme v2): true"
-          cp "$APK" "MeshMessenger-$GITHUB_REF_NAME.apk"
+          V1_APK="$RUNNER_TEMP/mesh-messenger-v1.apk"
+          ALIGNED_APK="$RUNNER_TEMP/mesh-messenger-aligned.apk"
+          FINAL_APK="MeshMessenger-$GITHUB_REF_NAME.apk"
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          ZIPALIGN="$ANDROID_HOME/build-tools/36.0.0/zipalign"
+
+          rm -f "$V1_APK" "$ALIGNED_APK" "$FINAL_APK"
+
+          jarsigner \
+            -keystore "$RELEASE_STORE_FILE" \
+            -storepass "$RELEASE_STORE_PASSWORD" \
+            -keypass "$RELEASE_KEY_PASSWORD" \
+            -sigalg SHA256withRSA \
+            -digestalg SHA-256 \
+            -signedjar "$V1_APK" \
+            "$APK" \
+            "$RELEASE_KEY_ALIAS"
+
+          "$ZIPALIGN" -f 4 "$V1_APK" "$ALIGNED_APK"
+
+          "$APKSIGNER" sign \
+            --ks "$RELEASE_STORE_FILE" \
+            --ks-pass env:RELEASE_STORE_PASSWORD \
+            --ks-key-alias "$RELEASE_KEY_ALIAS" \
+            --key-pass env:RELEASE_KEY_PASSWORD \
+            --v1-signing-enabled false \
+            --v2-signing-enabled true \
+            --v3-signing-enabled false \
+            --v4-signing-enabled false \
+            --out "$FINAL_APK" \
+            "$ALIGNED_APK"
+
+          "$APKSIGNER" verify --verbose --print-certs "$FINAL_APK"
+          "$APKSIGNER" verify --verbose "$FINAL_APK" | grep -q "Verified using v1 scheme (JAR signing): true"
+          "$APKSIGNER" verify --verbose "$FINAL_APK" | grep -q "Verified using v2 scheme (APK Signature Scheme v2): true"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
