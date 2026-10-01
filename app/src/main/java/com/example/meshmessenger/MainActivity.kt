@@ -227,7 +227,7 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(18), dp(14), dp(18), dp(22))
         }
         scroll.addView(root)
-        val background = FrameLayout(this).apply {
+        val rootBackground = FrameLayout(this).apply {
             setBackgroundColor(Color.rgb(2, 8, 19))
             addView(TronBackgroundView(this@MainActivity), FrameLayout.LayoutParams(-1, -1))
             addView(scroll, FrameLayout.LayoutParams(-1, -1))
@@ -343,7 +343,7 @@ class MainActivity : ComponentActivity() {
             setPadding(0, dp(12), 0, dp(8))
         })
 
-        setContentView(background)
+        setContentView(rootBackground)
         status.text = if (meshActive) "MESH АКТИВЕН" else "MESH ВЫКЛЮЧЕН"
         updateNetBirdStatus()
     }
