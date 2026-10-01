@@ -141,7 +141,9 @@ class MeshGattNode(
                 val q = notificationQueues[address]
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     q?.removeFirstOrNull()
+                    onDiagnostic("BLE_NOTIFY_TX", "success address=**${address.takeLast(5)} remaining=${q?.size ?: 0}")
                 } else {
+                    onDiagnostic("BLE_NOTIFY_TX", "failed address=**${address.takeLast(5)} status=$status")
                     onStatus("BLE: ошибка уведомления $status")
                     // Drop only the failed fragment; the next queued fragment can still proceed.
                     q?.removeFirstOrNull()
@@ -391,11 +393,13 @@ class MeshGattNode(
                     return
                 }
                 if (status != BluetoothGatt.GATT_SUCCESS) {
+                    onDiagnostic("BLE_WRITE_TX", "failed address=**${address.takeLast(5)} status=$status")
                     writing.remove(address)
                     onStatus("BLE: ошибка записи " + status)
                     flushPeerQueue(address)
                     return
                 }
+                onDiagnostic("BLE_WRITE_TX", "success address=**${address.takeLast(5)}")
                 val queueForPeer = writeQueues[address]
                 val task = queueForPeer?.firstOrNull()
                 if (task != null) {
@@ -487,6 +491,7 @@ class MeshGattNode(
         }
         val packetBytes = acceptFragment(from, bytes) ?: run { Log.d(TAG, "fragment_pending_or_rejected peer=${from.takeLast(5)} bytes=${bytes.size}"); return }
         Log.d(TAG, "packet_reassembled peer=${from.takeLast(5)} bytes=${packetBytes.size}")
+        onDiagnostic("BLE_PACKET_REASSEMBLED", "peer=**${from.takeLast(5)} bytes=${packetBytes.size}")
         handleIncoming(from, packetBytes)
     }
 
@@ -519,6 +524,7 @@ class MeshGattNode(
 
             require(assembly.count == count)
             assembly.parts[index] = payload
+            Log.d(TAG, "fragment_accepted peer=${from.takeLast(5)} id=$id index=$index count=$count payload=${payload.size}")
 
             if (assembly.parts.any { it == null }) {
                 null
@@ -556,7 +562,8 @@ class MeshGattNode(
     }
 
     private fun handleIncoming(from: String, bytes: ByteArray) {
-        val packet = MeshPacket.decode(bytes) ?: run { Log.w(TAG, "packet_decode_failed peer=${from.takeLast(5)} bytes=${bytes.size}"); return }
+        val packet = MeshPacket.decode(bytes) ?: run { Log.w(TAG, "packet_decode_failed peer=${from.takeLast(5)} bytes=${bytes.size}"); onDiagnostic("BLE_PACKET_DECODE", "failed peer=**${from.takeLast(5)} bytes=${bytes.size}"); return }
+        onDiagnostic("BLE_PACKET_RX", "peer=**${from.takeLast(5)} id=${packet.messageId} dst=${packet.destinationId.take(8)}")
         // Do not treat ordinary messages as presence. Presence is refreshed only
         // by the explicit BLE HELLO/presence exchange in the GATT path.
         Log.d(TAG, "packet_decoded peer=${from.takeLast(5)} id=${packet.messageId} src=${packet.sourceId.take(8)} dst=${packet.destinationId.take(8)} local=${packet.destinationId == localId}")
@@ -608,7 +615,23 @@ class MeshGattNode(
     fun retryPending() {
         onPeerCountChanged(peerCount())
         if (peers.isEmpty() && serverClients.isEmpty()) return
+        refreshPeerPresence()
         flushQueue()
+    }
+
+    /** Refresh application-level presence while GATT connections remain alive. */
+    @SuppressLint("MissingPermission")
+    private fun refreshPeerPresence() {
+        for ((address, gatt) in peers.toMap()) {
+            if (!notifyReady.contains(address) || writing.contains(address) || helloWriting.contains(address)) continue
+            onDiagnostic("BLE_PRESENCE_TX", "role=central address=**${address.takeLast(5)}")
+            writeHello(gatt)
+        }
+        for ((address, device) in serverClients.toMap()) {
+            if (!notifyReady.contains(address)) continue
+            onDiagnostic("BLE_PRESENCE_TX", "role=server address=**${address.takeLast(5)}")
+            sendHelloTo(device)
+        }
     }
 
     @SuppressLint("MissingPermission")
