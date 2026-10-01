@@ -81,14 +81,14 @@ class MeshForegroundService : Service() {
                     sendMeshStatus(false)
                 } else if (node == null) {
                     diagnostics.event("BLE_WATCHDOG", "node_missing_restart")
-                    startMesh(startBle = true)
+                    startMesh(startBle = true, reason = "WATCHDOG_NODE_MISSING")
                 } else if (node?.isHealthy() == true) {
                     sendMeshStatus(true)
                 } else if (System.currentTimeMillis() - nodeStartedAtMs >= 30_000L) {
                     diagnostics.event("BLE_WATCHDOG", "node_unhealthy_restart")
                     node?.stop()
                     node = null
-                    startMesh(startBle = true)
+                    startMesh(startBle = true, reason = "WATCHDOG_UNHEALTHY")
                 } else {
                     diagnostics.event("BLE_WATCHDOG", "node_initializing")
                     updateNotification("Mesh запускается…")
@@ -137,7 +137,7 @@ class MeshForegroundService : Service() {
         retryHandler.post(retryRunnable)
         meshEnabled = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_ENABLED, true)
         // The internet relay stays active independently of the BLE mesh toggle.
-        startMesh(startBle = meshEnabled)
+        startMesh(startBle = meshEnabled, reason = "SERVICE_CREATE")
         retryHandler.postDelayed(watchdogRunnable, 10_000L)
     }
 
@@ -149,10 +149,16 @@ class MeshForegroundService : Service() {
         when (intent?.action) {
 
             ACTION_APP_START -> {
+                // Service creation already starts the transports. Do not request another
+                // start just because the activity resumed while BLE is still initializing.
                 updateNotification("Mesh Messenger работает")
-                if (meshEnabled && (node == null || node?.isHealthy() != true)) startMesh(startBle = true)
-                else if (node?.isHealthy() == true) sendMeshStatus(true)
-                else sendMeshStatus(false)
+                if (meshEnabled && node == null) {
+                    startMesh(startBle = true, reason = "APP_START_NODE_MISSING")
+                } else if (node?.isHealthy() == true) {
+                    sendMeshStatus(true)
+                } else if (!meshEnabled) {
+                    sendMeshStatus(false)
+                }
             }
 
             ACTION_MESH_STATUS_REQUEST -> {
@@ -168,7 +174,7 @@ class MeshForegroundService : Service() {
             ACTION_START -> {
                 meshEnabled = true
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, true).apply()
-                startMesh(startBle = true)
+                startMesh(startBle = true, reason = "USER_ACTION_START")
             }
 
             ACTION_STOP -> {
@@ -206,8 +212,8 @@ class MeshForegroundService : Service() {
         return START_STICKY
     }
 
-    private fun startMesh(startBle: Boolean) {
-        diagnostics.event("MESH_START", "ble=$startBle")
+    private fun startMesh(startBle: Boolean, reason: String = "UNSPECIFIED") {
+        diagnostics.event("MESH_START", "source=$reason ble=$startBle nodePresent=${node != null}")
         if (startBle && node != null) {
             if (node?.isHealthy() == true) {
                 sendMeshStatus(true)
@@ -278,6 +284,7 @@ class MeshForegroundService : Service() {
 
         if (adapter != null) {
             runCatching {
+                diagnostics.event("BLE_NODE_CREATE", "source=$reason")
                 nodeStartedAtMs = System.currentTimeMillis()
                 node = MeshGattNode(
                     this,
