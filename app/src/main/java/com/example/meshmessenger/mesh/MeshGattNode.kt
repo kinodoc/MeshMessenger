@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.ParcelUuid
+import android.util.Log
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.util.Base64
@@ -56,6 +57,7 @@ class MeshGattNode(
     private val descriptor = BluetoothGattDescriptor(cccd, BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE)
 
     companion object {
+        private const val TAG = "MeshGattDiag"
         private const val FRAGMENT_MAGIC: Byte = 0x4D
         private const val HELLO_MAGIC = "MESH_HELLO_V1"
         private const val FRAGMENT_HEADER_SIZE = 21
@@ -96,6 +98,7 @@ class MeshGattNode(
             }
 
             override fun onCharacteristicWriteRequest(device: BluetoothDevice, requestId: Int, characteristic: BluetoothGattCharacteristic, preparedWrite: Boolean, responseNeeded: Boolean, offset: Int, value: ByteArray) {
+                Log.d(TAG, "gatt_write_rx peer=${device.address.takeLast(5)} uuid=${characteristic.uuid} bytes=${value.size} prepared=$preparedWrite response=$responseNeeded offset=$offset prefix=${value.take(8).joinToString("") { "%02x".format(it) }}")
                 if (characteristic.uuid == rx) handleIncomingFragment(device.address, value)
                 if (responseNeeded) server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
             }
@@ -317,6 +320,7 @@ class MeshGattNode(
                 }
             }
             override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
+                Log.d(TAG, "gatt_notify_rx peer=${device.address.takeLast(5)} uuid=${characteristic.uuid} bytes=${value.size} prefix=${value.take(8).joinToString("") { "%02x".format(it) }}")
                 if (characteristic.uuid == tx) handleIncomingFragment(device.address, value)
             }
             override fun onCharacteristicWrite(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
@@ -396,6 +400,7 @@ class MeshGattNode(
     }
 
     private fun handleIncomingFragment(from: String, bytes: ByteArray) {
+        Log.d(TAG, "fragment_rx peer=${from.takeLast(5)} bytes=${bytes.size} prefix=${bytes.take(8).joinToString("") { "%02x".format(it) }}")
         val text = String(bytes, StandardCharsets.UTF_8)
         if (text.startsWith(HELLO_MAGIC + "|")) {
             val parts = text.split("|", limit = 4)
@@ -421,7 +426,8 @@ class MeshGattNode(
             }
             return
         }
-        val packetBytes = acceptFragment(from, bytes) ?: return
+        val packetBytes = acceptFragment(from, bytes) ?: run { Log.d(TAG, "fragment_pending_or_rejected peer=${from.takeLast(5)} bytes=${bytes.size}"); return }
+        Log.d(TAG, "packet_reassembled peer=${from.takeLast(5)} bytes=${packetBytes.size}")
         handleIncoming(from, packetBytes)
     }
 
@@ -491,7 +497,8 @@ class MeshGattNode(
     }
 
     private fun handleIncoming(from: String, bytes: ByteArray) {
-        val packet = MeshPacket.decode(bytes) ?: return
+        val packet = MeshPacket.decode(bytes) ?: run { Log.w(TAG, "packet_decode_failed peer=${from.takeLast(5)} bytes=${bytes.size}"); return }
+        Log.d(TAG, "packet_decoded peer=${from.takeLast(5)} id=${packet.messageId} src=${packet.sourceId.take(8)} dst=${packet.destinationId.take(8)} local=${packet.destinationId == localId}")
         val next = router.onReceive(packet)
         if (packet.destinationId == localId) {
             val text = router.decryptForLocal(packet) ?: "[не удалось расшифровать]"
@@ -500,6 +507,7 @@ class MeshGattNode(
                 markDelivered(deliveredId)
                 onDeliveryAck(deliveredId)
             } else {
+                Log.d(TAG, "message_delivered_to_callback id=${packet.messageId} src=${packet.sourceId.take(8)} textBytes=${text.toByteArray(StandardCharsets.UTF_8).size}")
                 onMessage(text, packet.sourceId, packet)
                 val ack = runCatching { router.createDeliveryAck(packet) }.getOrNull()
                 if (ack != null) broadcast(ack.encode())
@@ -520,6 +528,7 @@ class MeshGattNode(
 
     @SuppressLint("MissingPermission")
     fun send(packet: MeshPacket) {
+        Log.d(TAG, "send_enqueue id=${packet.messageId} src=${packet.sourceId.take(8)} dst=${packet.destinationId.take(8)} peers=${peerCount()}")
         queue.enqueue(packet)
         flushQueue()
     }

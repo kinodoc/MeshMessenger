@@ -146,11 +146,15 @@ class MeshForegroundService : Service() {
 
             ACTION_SEND_MESH -> {
                 val encoded = intent.getByteArrayExtra(EXTRA_PACKET)
+                android.util.Log.d("MeshGattDiag", "service_send_mesh bytes=${encoded?.size ?: 0} nodeReady=${node != null}")
                 if (encoded != null) {
                     runCatching {
                         val packet = MeshPacket.decode(encoded)
                         if (packet != null) {
+                            android.util.Log.d("MeshGattDiag", "service_packet_decoded id=${packet.messageId} src=${packet.sourceId.take(8)} dst=${packet.destinationId.take(8)}")
                             node?.send(packet)
+                        } else {
+                            android.util.Log.w("MeshGattDiag", "service_packet_decode_failed bytes=${encoded.size}")
                         }
                     }.onFailure {
                         updateNotification("Ошибка отправки Mesh-пакета")
