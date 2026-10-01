@@ -12,7 +12,6 @@ class ContactStore(context: Context) {
         val nodeId: String,
         val name: String,
         val publicKeyBase64: String,
-        val netBirdIp: String = "",
         val lastSeenAt: Long = 0L
     )
 
@@ -44,7 +43,6 @@ class ContactStore(context: Context) {
                 val id = o.optString("nodeId")
                 val name = o.optString("name", id.take(8))
                 val key = o.optString("publicKey", "")
-                val netBirdIp = o.optString("netBirdIp", "")
                 val lastSeenAt = o.optLong("lastSeenAt", 0L)
 
                 if (id.isNotBlank() && key.isNotBlank()) {
@@ -53,7 +51,6 @@ class ContactStore(context: Context) {
                             nodeId = id,
                             name = name,
                             publicKeyBase64 = key,
-                            netBirdIp = netBirdIp,
                             lastSeenAt = lastSeenAt
                         )
                     )
@@ -71,7 +68,6 @@ class ContactStore(context: Context) {
                     put("nodeId", c.nodeId)
                     put("name", c.name)
                     put("publicKey", c.publicKeyBase64)
-                    put("netBirdIp", c.netBirdIp)
                     put("lastSeenAt", c.lastSeenAt)
                 }
             )

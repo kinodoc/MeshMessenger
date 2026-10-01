@@ -18,7 +18,7 @@ class UpdateManager(private val context: Context) {
     private var pendingFile: File? = null
 
     /**
-     * GitHub updates must use the real Internet connection, never the NetBird VPN.
+     * GitHub updates use the device normal Internet connection.
      * Do not fall back to URL.openConnection(): Android may route that through the VPN.
      */
     private fun openHttpConnection(url: String): HttpURLConnection {

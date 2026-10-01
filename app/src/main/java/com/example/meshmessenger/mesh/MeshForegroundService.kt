@@ -28,26 +28,22 @@ class MeshForegroundService : Service() {
         const val ACTION_APP_START = "com.example.meshmessenger.APP_START"
         const val ACTION_START = "com.example.meshmessenger.START_MESH"
         const val ACTION_STOP = "com.example.meshmessenger.STOP_MESH"
-        const val ACTION_SEND_IP = "com.example.meshmessenger.SEND_IP"
 	const val ACTION_SEND_MESH = "com.example.meshmessenger.SEND_MESH"
-        const val EXTRA_IP = "ip"
         const val EXTRA_PACKET = "packet"
 
-        const val ACTION_IP_MESSAGE = "com.example.meshmessenger.IP_MESSAGE"
+        const val ACTION_RELAY_MESSAGE = "com.example.meshmessenger.RELAY_MESSAGE"
         const val ACTION_MESH_MESSAGE = "com.example.meshmessenger.MESH_MESSAGE"
-        const val EXTRA_TEXT = "text"
+        const val EXTRA_RELAY_TEXT = "relay_text"
         const val EXTRA_SOURCE_ID = "source_id"
         const val EXTRA_MESH_TEXT = "mesh_text"
 
-        const val ACTION_IP_STATUS = "com.example.meshmessenger.IP_STATUS"
         const val ACTION_MESH_STATUS = "com.example.meshmessenger.MESH_STATUS"
         const val ACTION_MESH_STATUS_REQUEST = "com.example.meshmessenger.MESH_STATUS_REQUEST"
         const val EXTRA_MESH_ACTIVE = "mesh_active"
         const val EXTRA_PACKET_ID = "packet_id"
-        const val EXTRA_IP_SUCCESS = "ip_success"
         const val ACTION_PEER_STATUS = "com.example.meshmessenger.PEER_STATUS"
         const val EXTRA_BLE_COUNT = "ble_count"
-        const val EXTRA_NETBIRD_COUNT = "netbird_count"
+        const val EXTRA_RELAY_COUNT = "relay_count"
         const val ACTION_MESH_DELIVERED = "com.example.meshmessenger.MESH_DELIVERED"
         const val EXTRA_DELIVERED_PACKET_ID = "delivered_packet_id"
 
@@ -58,13 +54,12 @@ class MeshForegroundService : Service() {
 
     private var node: MeshGattNode? = null
     private var meshEnabled = false
-    private var ipTransport: MeshRelayTransport? = null
-    private lateinit var pendingIp: PendingIpMessageStore
+    private var relayTransport: MeshRelayTransport? = null
     private lateinit var pendingMesh: PendingMessageStore
     private lateinit var contacts: ContactStore
     private lateinit var chats: ChatStore
     private var blePeerCount = 0
-    private var netBirdPeerCount = 0 // relay peer count; retained broadcast key for app compatibility
+    private var relayPeerCount = 0
     private lateinit var diagnostics: MeshDiagnostics
     private lateinit var bluetoothMonitor: MeshBluetoothMonitor
 
@@ -72,8 +67,7 @@ class MeshForegroundService : Service() {
 
     private val retryRunnable = object : Runnable {
         override fun run() {
-            retryPendingIp()
-            ipTransport?.retryPending()
+            relayTransport?.retryPending()
             node?.retryPending()
             retryHandler.postDelayed(this, RETRY_INTERVAL_MS)
         }
@@ -102,7 +96,6 @@ class MeshForegroundService : Service() {
             notification("Mesh Messenger работает")
         )
 
-        pendingIp = PendingIpMessageStore(this)
         pendingMesh = PendingMessageStore(this)
         contacts = ContactStore(this)
         chats = ChatStore(this)
@@ -151,7 +144,7 @@ class MeshForegroundService : Service() {
                         if (packet != null) {
                             android.util.Log.d("MeshGattDiag", "service_packet_decoded id=${packet.messageId} src=${packet.sourceId.take(8)} dst=${packet.destinationId.take(8)}")
                             node?.send(packet)
-                            ipTransport?.send(packet)
+                            relayTransport?.send(packet)
                         } else {
                             android.util.Log.w("MeshGattDiag", "service_packet_decode_failed bytes=${encoded.size}")
                         }
@@ -161,27 +154,6 @@ class MeshForegroundService : Service() {
                 }
             }
 
-            ACTION_SEND_IP -> {
-
-                val ip = intent.getStringExtra(EXTRA_IP)
-                val bytes = intent.getByteArrayExtra(EXTRA_PACKET)
-
-                if (!ip.isNullOrBlank() && bytes != null) {
-                    val packet = MeshPacket.decode(bytes)
-
-                    if (packet != null) {
-                        if (ipTransport == null) startMesh(startBle = false)
-                        val success = ipTransport?.send(packet, ip) == true
-
-                        sendIpStatus(
-                            packet.messageId.toString(),
-                            success
-                        )
-                    } else {
-                        updateNotification("IP: неверный пакет")
-                    }
-                }
-            }
 
             else -> {
                 sendMeshStatus(node != null)
@@ -209,8 +181,8 @@ class MeshForegroundService : Service() {
 
         val queue = PendingMessageStore(this)
 
-        if (ipTransport == null) runCatching {
-            ipTransport = MeshRelayTransport(
+        if (relayTransport == null) runCatching {
+            relayTransport = MeshRelayTransport(
                 localId = identity.nodeId,
                 localName = identity.displayName,
                 publicKey = identity.keyPair.public.encoded,
@@ -219,29 +191,27 @@ class MeshForegroundService : Service() {
                 onStatus = { updateNotification(it) },
                 onMessage = { text, sourceId, packet, _ ->
                     rememberPeer(packet)
-                    handleIncomingPersisted(text, sourceId, packet.messageId.toString(), ACTION_IP_MESSAGE)
+                    handleIncomingPersisted(text, sourceId, packet.messageId.toString(), ACTION_RELAY_MESSAGE)
                 },
                 onDeliveryAck = { packetId -> sendDeliveryStatus(packetId) },
                 onPeer = { nodeId, name, publicKey, _ ->
                     val key = Base64.encodeToString(publicKey, Base64.NO_WRAP)
-                    val current = contacts.get(nodeId)
                     contacts.upsert(
                         ContactStore.Contact(
                             nodeId = nodeId,
                             name = name.trim().ifBlank { nodeId.take(8) },
                             publicKeyBase64 = key,
-                            netBirdIp = current?.netBirdIp.orEmpty(),
                             lastSeenAt = System.currentTimeMillis()
                         )
                     )
                 },
                 onPeerCount = { count ->
-                    netBirdPeerCount = count
+                    relayPeerCount = count
                     sendPeerStatus()
                 }
             ).also { it.start() }
         }.onFailure {
-            ipTransport = null
+            relayTransport = null
             updateNotification("Relay: не удалось запустить транспорт")
             android.util.Log.e("MeshMessenger", "Relay transport start failed", it)
         }
@@ -272,13 +242,11 @@ class MeshForegroundService : Service() {
                     },
                     { nodeId, name, publicKey ->
                         val key = android.util.Base64.encodeToString(publicKey, android.util.Base64.NO_WRAP)
-                        val current = contacts.get(nodeId)
                         contacts.upsert(
                             ContactStore.Contact(
                                 nodeId = nodeId,
                                 name = name.trim().ifBlank { nodeId.take(8) },
                                 publicKeyBase64 = key,
-                                netBirdIp = current?.netBirdIp.orEmpty(),
                                 lastSeenAt = System.currentTimeMillis()
                             )
                         )
@@ -304,42 +272,16 @@ class MeshForegroundService : Service() {
         sendMeshStatus(active)
     }
 
-    private fun retryPendingIp() {
-        val transport = ipTransport ?: return
-        val entries = pendingIp.snapshot()
-        if (entries.isEmpty()) {
-            return
-        }
 
-        for (entry in entries) {
-            val packet = MeshPacket.decode(entry.bytes) ?: run {
-                pendingIp.remove(entry.id)
-                sendIpStatus(entry.id.toString(), false)
-                continue
-            }
-
-            val success = transport.send(packet, entry.ip)
-
-            if (success) {
-                // Keep the durable entry until the receiver sends a delivery ACK.
-                // A successful TCP write only proves that bytes reached the peer's
-                // socket; it does not prove decrypt/persist/delivery.
-                sendIpStatus(entry.id.toString(), true)
-            }
-        }
-    }
-
-    private fun rememberPeer(packet: MeshPacket, netBirdIp: String = "") {
+    private fun rememberPeer(packet: MeshPacket) {
         val name = packet.senderName.trim().ifBlank { packet.sourceId.take(8) }
         val key = Base64.encodeToString(packet.senderPublicKey, Base64.NO_WRAP)
         if (packet.sourceId.isNotBlank() && key.isNotBlank()) {
-            val current = contacts.get(packet.sourceId)
             contacts.upsert(
                 ContactStore.Contact(
                     nodeId = packet.sourceId,
                     name = name,
                     publicKeyBase64 = key,
-                    netBirdIp = netBirdIp.ifBlank { current?.netBirdIp.orEmpty() },
                     lastSeenAt = System.currentTimeMillis()
                 )
             )
@@ -351,7 +293,6 @@ class MeshForegroundService : Service() {
         if (packetId.isBlank()) return
         runCatching {
             val id = java.util.UUID.fromString(packetId)
-            pendingIp.remove(id)
             pendingMesh.remove(id)
         }
         sendBroadcast(Intent(ACTION_MESH_DELIVERED).apply {
@@ -360,18 +301,6 @@ class MeshForegroundService : Service() {
         })
     }
 
-    private fun sendIpStatus(
-        packetId: String,
-        success: Boolean
-    ) {
-        val statusIntent = Intent(ACTION_IP_STATUS).apply {
-            setPackage(packageName)
-            putExtra(EXTRA_PACKET_ID, packetId)
-            putExtra(EXTRA_IP_SUCCESS, success)
-        }
-
-        sendBroadcast(statusIntent)
-    }
 
     private fun handleIncomingPersisted(
         text: String,
@@ -387,8 +316,8 @@ class MeshForegroundService : Service() {
 
         val intent = Intent(action).apply {
             setPackage(packageName)
-            if (action == ACTION_IP_MESSAGE) {
-                putExtra(EXTRA_TEXT, text)
+            if (action == ACTION_RELAY_MESSAGE) {
+                putExtra(EXTRA_RELAY_TEXT, text)
             } else {
                 putExtra(EXTRA_MESH_TEXT, text)
             }
@@ -410,11 +339,11 @@ class MeshForegroundService : Service() {
         sendMeshStatus(false)
     }
 
-    private fun stopNetBirdLayer() {
+    private fun stopRelayLayer() {
         retryHandler.removeCallbacks(retryRunnable)
-        ipTransport?.stop()
-        ipTransport = null
-        netBirdPeerCount = 0
+        relayTransport?.stop()
+        relayTransport = null
+        relayPeerCount = 0
         sendPeerStatus()
     }
 
@@ -462,7 +391,7 @@ class MeshForegroundService : Service() {
         val intent = Intent(ACTION_PEER_STATUS).apply {
             setPackage(packageName)
             putExtra(EXTRA_BLE_COUNT, blePeerCount)
-            putExtra(EXTRA_NETBIRD_COUNT, netBirdPeerCount)
+            putExtra(EXTRA_RELAY_COUNT, relayPeerCount)
         }
         sendBroadcast(intent)
     }
@@ -491,7 +420,7 @@ class MeshForegroundService : Service() {
     override fun onDestroy() {
         bluetoothMonitor.stop()
         stopMesh()
-        stopNetBirdLayer()
+        stopRelayLayer()
         super.onDestroy()
     }
 }

@@ -45,6 +45,7 @@ class MeshRelayTransport(
     @Volatile private var socket: SSLSocket? = null
     @Volatile private var writer: BufferedWriter? = null
     @Volatile private var reader: BufferedReader? = null
+    @Volatile private var lastPingAt = 0L
 
     private val sslContext: SSLContext by lazy {
         val trust = object : X509TrustManager {
@@ -87,6 +88,10 @@ class MeshRelayTransport(
 
     fun retryPending() {
         if (!running.get() || writer == null) return
+        val now = System.currentTimeMillis()
+        if (now - lastPingAt >= 20_000L) {
+            if (sendJson(JSONObject().put("type", "ping"))) lastPingAt = now
+        }
         queue.snapshot().take(32).forEach { entry ->
             val packet = MeshPacket.decode(entry.bytes) ?: return@forEach
             send(packet)
@@ -156,10 +161,11 @@ class MeshRelayTransport(
                 val packet = MeshPacket.decode(bytes) ?: return
                 val next = router.onReceive(packet)
                 if (packet.destinationId == localId) {
-                    val text = router.decryptForLocal(packet) ?: "[не удалось расшифровать]"
+                    val text = router.decryptForLocal(packet) ?: return
+                    // Tell the relay it is safe to delete its queued copy only after decryption succeeds.
+                    sendJson(JSONObject().put("type", "delivered").put("messageId", packet.messageId.toString()))
                     if (text.startsWith(MeshRouter.DELIVERY_ACK_PREFIX)) {
                         val deliveredId = text.removePrefix(MeshRouter.DELIVERY_ACK_PREFIX)
-                        sendJson(JSONObject().put("type", "delivered").put("messageId", deliveredId))
                         onDeliveryAck(deliveredId)
                     } else {
                         onMessage(text, packet.sourceId, packet, "")

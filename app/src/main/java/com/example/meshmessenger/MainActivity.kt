@@ -570,7 +570,7 @@ class MainActivity : ComponentActivity() {
                 val parts = raw.split("|", limit = 4)
                 val publicKey = parts.getOrNull(2).orEmpty()
                 if (parts.size >= 3 && parts[0].isNotBlank() && publicKey.isNotBlank() && runCatching { CryptoManager.publicKeyFromBase64(publicKey) }.isSuccess) {
-                    contacts.upsert(ContactStore.Contact(parts[0], name, publicKey, ""))
+                    contacts.upsert(ContactStore.Contact(parts[0], name, publicKey))
                     log.text = "Контакт добавлен: $name • поиск через BLE и Relay"
                 } else log.text = "Неверная QR-карточка. Формат: NodeID|имя|publicKey"
             }.setNegativeButton("Отмена", null).show()
@@ -888,10 +888,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private val ipMessageReceiver = object : android.content.BroadcastReceiver() {
+    private val relayMessageReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action != MeshForegroundService.ACTION_IP_MESSAGE) return
-            val text = intent.getStringExtra(MeshForegroundService.EXTRA_TEXT) ?: return
+            if (intent?.action != MeshForegroundService.ACTION_RELAY_MESSAGE) return
+            val text = intent.getStringExtra(MeshForegroundService.EXTRA_RELAY_TEXT) ?: return
             val sourceId = intent.getStringExtra(MeshForegroundService.EXTRA_SOURCE_ID) ?: return
             val packetId = intent.getStringExtra(MeshForegroundService.EXTRA_PACKET_ID).orEmpty()
             handleIncoming(text, sourceId, packetId)
@@ -927,7 +927,7 @@ class MainActivity : ComponentActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != MeshForegroundService.ACTION_PEER_STATUS) return
             val ble = intent.getIntExtra(MeshForegroundService.EXTRA_BLE_COUNT, 0)
-            val relayPeers = intent.getIntExtra(MeshForegroundService.EXTRA_NETBIRD_COUNT, 0)
+            val relayPeers = intent.getIntExtra(MeshForegroundService.EXTRA_RELAY_COUNT, 0)
             val bluetoothIcon = if (ble > 0) R.drawable.ic_bluetooth_mesh else 0
             val relayIcon = if (relayPeers > 0) R.drawable.ic_relay_radio else 0
             peerStatus.text = when {
@@ -951,22 +951,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private val ipStatusReceiver = object : android.content.BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action != MeshForegroundService.ACTION_IP_STATUS) return
-
-            val packetId = intent.getStringExtra(MeshForegroundService.EXTRA_PACKET_ID) ?: return
-            val success = intent.getBooleanExtra(MeshForegroundService.EXTRA_IP_SUCCESS, false)
-
-            if (!success) {
-                chats.updateDelivery(packetId, ChatStore.Delivery.NOT_SENT)
-                refreshOpenChat?.invoke()
-                log.text = "⚠ Не отправлено: Relay недоступен"
-            } else {
-                log.text = "◷ Relay принял сообщение; ждём подтверждения получателя"
-            }
-        }
-    }
 
     override fun onResume() {
         super.onResume()
@@ -979,9 +963,8 @@ class MainActivity : ComponentActivity() {
         contactStatusHandler.post(contactStatusRunnable)
         try {
             androidx.core.content.ContextCompat.registerReceiver(this, deliveryReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_DELIVERED), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
-            androidx.core.content.ContextCompat.registerReceiver(this, ipStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_IP_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             androidx.core.content.ContextCompat.registerReceiver(this, meshMessageReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_MESSAGE), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
-            androidx.core.content.ContextCompat.registerReceiver(this, ipMessageReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_IP_MESSAGE), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+            androidx.core.content.ContextCompat.registerReceiver(this, relayMessageReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_RELAY_MESSAGE), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             androidx.core.content.ContextCompat.registerReceiver(this, meshStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             androidx.core.content.ContextCompat.registerReceiver(this, peerStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_PEER_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             startService(Intent(this, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_MESH_STATUS_REQUEST))
@@ -998,9 +981,8 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         contactStatusHandler.removeCallbacks(contactStatusRunnable)
         runCatching { unregisterReceiver(deliveryReceiver) }
-        runCatching { unregisterReceiver(ipStatusReceiver) }
         runCatching { unregisterReceiver(meshMessageReceiver) }
-        runCatching { unregisterReceiver(ipMessageReceiver) }
+        runCatching { unregisterReceiver(relayMessageReceiver) }
         runCatching { unregisterReceiver(meshStatusReceiver) }
         runCatching { unregisterReceiver(peerStatusReceiver) }
         super.onStop()
