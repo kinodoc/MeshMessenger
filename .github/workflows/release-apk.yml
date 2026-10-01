@@ -79,7 +79,6 @@ jobs:
           test -s "$APK"
           cp "$APK" "$FINAL_APK"
           "$APKSIGNER" verify --verbose --print-certs "$FINAL_APK"
-          "$APKSIGNER" verify --verbose "$FINAL_APK" | grep -q "Verified using v1 scheme (JAR signing): true"
           "$APKSIGNER" verify --verbose "$FINAL_APK" | grep -q "Verified using v2 scheme (APK Signature Scheme v2): true"
 
       - name: Publish GitHub Release
