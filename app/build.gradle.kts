@@ -16,11 +16,12 @@ android {
         buildConfig = true
     }
 
+    val releaseStoreFilePath = System.getenv("RELEASE_STORE_FILE")
+
     signingConfigs {
         create("release") {
-            val storeFilePath = System.getenv("RELEASE_STORE_FILE")
-            if (!storeFilePath.isNullOrBlank()) {
-                storeFile = file(storeFilePath)
+            if (!releaseStoreFilePath.isNullOrBlank()) {
+                storeFile = file(releaseStoreFilePath)
             }
             storePassword = System.getenv("RELEASE_STORE_PASSWORD")
             keyAlias = System.getenv("RELEASE_KEY_ALIAS")
@@ -32,7 +33,11 @@ android {
 
     buildTypes {
         getByName("release") {
-            signingConfig = signingConfigs.getByName("release")
+            // The main-branch workflow signs the unsigned APK in a separate step.
+            // The tag release workflow supplies RELEASE_STORE_FILE and signs in Gradle.
+            if (!releaseStoreFilePath.isNullOrBlank()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
