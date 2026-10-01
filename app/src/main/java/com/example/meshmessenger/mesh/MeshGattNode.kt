@@ -177,13 +177,38 @@ class MeshGattNode(
             .addServiceData(ParcelUuid(service), nodeIdBytes)
             .build()
 
+        var retriedWithoutScanResponse = false
         advertiseCallback = object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
-                onDiagnostic("BLE_ADVERTISE", "started mode=BALANCED tx=MEDIUM")
+                onDiagnostic(
+                    "BLE_ADVERTISE",
+                    if (retriedWithoutScanResponse) {
+                        "started mode=BALANCED tx=MEDIUM scanResponse=off"
+                    } else {
+                        "started mode=BALANCED tx=MEDIUM scanResponse=on"
+                    }
+                )
                 onStatus("Mesh активен • BLE relay готов")
             }
             override fun onStartFailure(errorCode: Int) {
                 onDiagnostic("BLE_ADVERTISE", "failed code=" + errorCode)
+                // Some Android 11/OEM Bluetooth stacks reject a perfectly valid
+                // 128-bit service-data scan response as "data too large" (1).
+                // The service UUID is already in the primary advertisement, so
+                // the scan response is optional. Retry once without it; the peer
+                // Node ID will be learned from the GATT HELLO after connection.
+                if (errorCode == AdvertiseCallback.ADVERTISE_FAILED_DATA_TOO_LARGE &&
+                    !retriedWithoutScanResponse
+                ) {
+                    retriedWithoutScanResponse = true
+                    onDiagnostic("BLE_ADVERTISE", "retry_without_scan_response")
+                    runCatching {
+                        adv.startAdvertising(settings, data, advertiseCallback!!)
+                    }.onFailure {
+                        onDiagnostic("BLE_ADVERTISE", "fallback_exception=" + it.javaClass.simpleName)
+                    }
+                    return
+                }
                 onStatus("BLE advertising error: " + errorCode)
             }
         }
