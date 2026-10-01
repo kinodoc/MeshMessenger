@@ -679,7 +679,11 @@ class MeshGattNode(
     private fun peerCount(): Int {
         val now = System.currentTimeMillis()
         peerLastSeenAt.entries.removeIf { now - it.value > PEER_PRESENCE_TTL_MS }
-        return peerLastSeenAt.count { now - it.value <= PEER_PRESENCE_TTL_MS }
+        // A live GATT connection is itself proof that BLE is connected, even if
+        // the peer's HELLO/presence packet has not arrived (or has expired).
+        // Count both central and peripheral connections, deduplicated by address.
+        val connectedAddresses = peers.keys.toMutableSet().apply { addAll(serverClients.keys) }
+        return maxOf(connectedAddresses.size, peerLastSeenAt.count { now - it.value <= PEER_PRESENCE_TTL_MS })
     }
 
     fun onlinePeerCount(): Int = peerCount()
