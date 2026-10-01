@@ -20,29 +20,10 @@ android {
         applicationId = "com.example.meshmessenger"
         minSdk = 26
         targetSdk = 36
-        versionCode = 56
-        versionName = "0.24.30"
+        versionCode = 57
+        versionName = "0.24.31"
     }
 
-    signingConfigs {
-        create("release") {
-            val storeFilePath = System.getenv("RELEASE_STORE_FILE")
-            if (!storeFilePath.isNullOrBlank()) {
-                storeFile = file(storeFilePath)
-                storePassword = System.getenv("RELEASE_STORE_PASSWORD")
-                keyAlias = System.getenv("RELEASE_KEY_ALIAS")
-                keyPassword = System.getenv("RELEASE_STORE_PASSWORD")
-                enableV1Signing = true
-                enableV2Signing = true
-            }
-        }
-    }
-
-    buildTypes {
-        getByName("release") {
-            signingConfig = signingConfigs.getByName("release")
-        }
-    }
 }
 
 kotlin {
