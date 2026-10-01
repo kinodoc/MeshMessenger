@@ -51,6 +51,7 @@ class MeshIpTransport(
     private val running = AtomicBoolean(false)
     private val executor = Executors.newCachedThreadPool()
     private val peers = ConcurrentHashMap<String, Long>()
+    private val peerIps = ConcurrentHashMap<String, String>()
 
     @Volatile
     private var server: ServerSocket? = null
@@ -143,7 +144,24 @@ class MeshIpTransport(
         runCatching { server?.close() }
         server = null
         peers.clear()
+        peerIps.clear()
         onPeerCount(0)
+    }
+
+    /**
+     * Drain the transport-independent durable queue through currently known
+     * NetBird peers. A successful TCP write is not a delivery confirmation;
+     * the queue is cleared only after the recipient's delivery ACK.
+     */
+    fun retryPending() {
+        if (!running.get() || guard.localNetBirdIp().isNullOrBlank()) return
+        purgePeers()
+        val entries = queue.snapshot()
+        for (entry in entries) {
+            val packet = MeshPacket.decode(entry.bytes) ?: continue
+            val targetIp = peerIps[packet.destinationId] ?: continue
+            send(packet, targetIp)
+        }
     }
 
     fun send(packet: MeshPacket, host: String): Boolean {
@@ -237,13 +255,19 @@ class MeshIpTransport(
         val key = runCatching { Base64.getDecoder().decode(parts[3]) }.getOrNull() ?: return
         if (key.isEmpty()) return
         peers[id] = System.currentTimeMillis()
+        peerIps[id] = remote.hostAddress.orEmpty()
         onPeerCount(peers.size)
         onPeer(id, name, key, remote.hostAddress.orEmpty())
     }
 
     private fun purgePeers() {
         val cutoff = System.currentTimeMillis() - PEER_TTL_MS
-        peers.entries.removeIf { it.value < cutoff }
+        peers.entries.removeIf {
+            if (it.value < cutoff) {
+                peerIps.remove(it.key)
+                true
+            } else false
+        }
         onPeerCount(peers.size)
     }
 

@@ -61,6 +61,7 @@ class MeshForegroundService : Service() {
     private var ipTransport: MeshIpTransport? = null
     private var netBirdGuard: NetBirdGuard? = null
     private lateinit var pendingIp: PendingIpMessageStore
+    private lateinit var pendingMesh: PendingMessageStore
     private lateinit var contacts: ContactStore
     private lateinit var chats: ChatStore
     private var blePeerCount = 0
@@ -73,6 +74,7 @@ class MeshForegroundService : Service() {
     private val retryRunnable = object : Runnable {
         override fun run() {
             retryPendingIp()
+            ipTransport?.retryPending()
             node?.retryPending()
             retryHandler.postDelayed(this, RETRY_INTERVAL_MS)
         }
@@ -102,6 +104,7 @@ class MeshForegroundService : Service() {
         )
 
         pendingIp = PendingIpMessageStore(this)
+        pendingMesh = PendingMessageStore(this)
         contacts = ContactStore(this)
         chats = ChatStore(this)
         retryHandler.post(retryRunnable)
@@ -365,7 +368,11 @@ class MeshForegroundService : Service() {
 
     private fun sendDeliveryStatus(packetId: String) {
         if (packetId.isBlank()) return
-        runCatching { pendingIp.remove(java.util.UUID.fromString(packetId)) }
+        runCatching {
+            val id = java.util.UUID.fromString(packetId)
+            pendingIp.remove(id)
+            pendingMesh.remove(id)
+        }
         sendBroadcast(Intent(ACTION_MESH_DELIVERED).apply {
             setPackage(packageName)
             putExtra(EXTRA_DELIVERED_PACKET_ID, packetId)

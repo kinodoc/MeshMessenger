@@ -36,7 +36,11 @@ class MeshRouter(
     }
 
     fun onReceive(packet: MeshPacket): MeshPacket? {
-        if (!seen.acceptFirstTime(packet.messageId)) return null
+        val firstTime = seen.acceptFirstTime(packet.messageId)
+        // If our delivery ACK was lost, the sender will retry the same packet.
+        // A duplicate addressed to this node must be processed again so we can
+        // re-issue the ACK, while ChatStore de-duplicates the visible message.
+        if (!firstTime) return if (packet.destinationId == localId) packet else null
         if (packet.destinationId == localId) return packet
         if (packet.ttl <= 0) return null
         return packet.relay()

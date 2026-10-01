@@ -36,7 +36,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var router: MeshRouter
     private lateinit var contacts: ContactStore
     private lateinit var chats: ChatStore
-    private lateinit var pendingIp: PendingIpMessageStore
+    private lateinit var pendingOutbox: PendingMessageStore
     private lateinit var netBird: NetBirdGuard
     private lateinit var updater: UpdateManager
     private lateinit var netBirdStatus: TextView
@@ -103,7 +103,7 @@ class MainActivity : ComponentActivity() {
         router = MeshRouter(identity.nodeId, identity.keyPair.private).also { it.identityPublicBytes = identity.keyPair.public.encoded }
         contacts = ContactStore(this)
         chats = ChatStore(this)
-        pendingIp = PendingIpMessageStore(this)
+        pendingOutbox = PendingMessageStore(this)
         netBird = NetBirdGuard(this)
         updater = UpdateManager(this)
         buildHome()
@@ -489,6 +489,14 @@ class MainActivity : ComponentActivity() {
                     setTextColor(0xFF6B8799.toInt())
                     setPadding(0, 4, 0, 0)
                 })
+                addView(TextView(this@MainActivity).apply {
+                    val lastSeen = contact.lastSeenAt
+                    val online = lastSeen > 0L && System.currentTimeMillis() - lastSeen <= 30_000L
+                    text = if (online) "● В СЕТИ" else "● НЕ В СЕТИ"
+                    textSize = 11f
+                    setTextColor(if (online) 0xFF00FF9D.toInt() else 0xFF6B8799.toInt())
+                    setPadding(0, 5, 0, 0)
+                })
             }.also { (it.layoutParams as? LinearLayout.LayoutParams)?.setMargins(0, 0, 0, 10) })
         }
         if (contacts.all().isEmpty()) {
@@ -635,27 +643,22 @@ class MainActivity : ComponentActivity() {
                 val public = CryptoManager.publicKeyFromBase64(contact.publicKeyBase64)
                 val packet = router.createEncryptedMessage(contact.nodeId, public, text, identity.displayName)
 
+                pendingOutbox.enqueue(packet)
+
                 if (netBird.onlyNetBird) {
                     val ip = contact.netBirdIp.trim()
                     val connected = netBird.status() == NetBirdGuard.Status.CONNECTED || !netBird.localNetBirdIp().isNullOrBlank()
+                    chats.add(contact.nodeId, text, true, ChatStore.Delivery.WAITING, packet.messageId.toString())
 
-                    if (ip.isBlank()) {
-                        chats.add(contact.nodeId, text, true, ChatStore.Delivery.NOT_SENT, packet.messageId.toString())
-                        log.text = "⚠ Не отправлено: у контакта нет внутреннего IP"
+                    if (connected && ip.isNotBlank()) {
+                        startService(Intent(this, MeshForegroundService::class.java).apply {
+                            action = MeshForegroundService.ACTION_SEND_IP
+                            putExtra(MeshForegroundService.EXTRA_IP, ip)
+                            putExtra(MeshForegroundService.EXTRA_PACKET, packet.encode())
+                        })
+                        log.text = "◷ Ожидает подтверждения получателя через внутреннюю сеть"
                     } else {
-                        pendingIp.enqueue(packet, ip)
-                        chats.add(contact.nodeId, text, true, if (connected) ChatStore.Delivery.WAITING else ChatStore.Delivery.NOT_SENT, packet.messageId.toString())
-
-                        if (connected) {
-                            startService(Intent(this, MeshForegroundService::class.java).apply {
-                                action = MeshForegroundService.ACTION_SEND_IP
-                                putExtra(MeshForegroundService.EXTRA_IP, ip)
-                                putExtra(MeshForegroundService.EXTRA_PACKET, packet.encode())
-                            })
-                            log.text = "◷ Ожидает отправки через внутреннюю сеть"
-                        } else {
-                            log.text = "⚠ Не отправлено: внутренняя сеть не подключена"
-                        }
+                        log.text = "◷ Сообщение сохранено в очереди и будет отправлено при появлении канала"
                     }
                 } else {
                     startService(Intent(this, MeshForegroundService::class.java).apply {
@@ -748,7 +751,7 @@ class MainActivity : ComponentActivity() {
         // Presence is transport-independent: NetBird discovery must remain
         // meaningful even when the BLE Mesh toggle is off.
         val online = lastSeen > 0L && System.currentTimeMillis() - lastSeen <= 30_000L
-        view.text = if (online) "● ПОДКЛЮЧЕН" else "● НЕ В СЕТИ"
+        view.text = if (online) "● В СЕТИ" else "● НЕ В СЕТИ"
         view.setTextColor(if (online) 0xFF00FF9D.toInt() else 0xFF6B8799.toInt())
     }
 
@@ -757,7 +760,12 @@ class MainActivity : ComponentActivity() {
             if (intent?.action != MeshForegroundService.ACTION_PEER_STATUS) return
             val ble = intent.getIntExtra(MeshForegroundService.EXTRA_BLE_COUNT, 0)
             val netBirdPeers = intent.getIntExtra(MeshForegroundService.EXTRA_NETBIRD_COUNT, 0)
-            peerStatus.text = "BLE $ble   •   NetBird $netBirdPeers   •   онлайн через любой канал"
+            peerStatus.text = when {
+                ble > 0 && netBirdPeers > 0 -> "КАНАЛЫ: BLE • NetBird"
+                ble > 0 -> "КАНАЛ: BLE"
+                netBirdPeers > 0 -> "КАНАЛ: NetBird"
+                else -> "КАНАЛ: —"
+            }
         }
     }
 
