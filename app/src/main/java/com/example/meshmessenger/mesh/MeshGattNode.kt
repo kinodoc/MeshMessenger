@@ -699,15 +699,26 @@ class MeshGattNode(
         gattServerReady = false
         advertisingStarted = false
         scanningStarted = false
-        scanner?.let { sc -> scanCallback?.let { cb -> sc.stopScan(cb) } }
+        // Android may turn the adapter off before the watchdog calls stop().
+        // BLE scanner APIs throw IllegalStateException in that state; shutdown
+        // must remain best-effort and must never crash the process.
+        if (runCatching { adapter.isEnabled }.getOrDefault(false)) {
+            scanner?.let { sc ->
+                scanCallback?.let { cb ->
+                    runCatching { sc.stopScan(cb) }
+                        .onFailure { onDiagnostic("BLE_SCAN", "stop_failed ${it.javaClass.simpleName}") }
+                }
+            }
+        }
         scanCallback = null
         scanner = null
         scanningStarted = false
         val adv = advertiser
         val callback = advertiseCallback
-        if (adv != null && callback != null) {
+        if (adv != null && callback != null && runCatching { adapter.isEnabled }.getOrDefault(false)) {
             runCatching { adv.stopAdvertising(callback) }
                 .onSuccess { onDiagnostic("BLE_ADVERTISE", "stopped") }
+                .onFailure { onDiagnostic("BLE_ADVERTISE", "stop_failed ${it.javaClass.simpleName}") }
         }
         advertiseCallback = null
         advertiser = null
