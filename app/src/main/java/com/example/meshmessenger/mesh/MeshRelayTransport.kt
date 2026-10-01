@@ -41,7 +41,8 @@ class MeshRelayTransport(
     private val running = AtomicBoolean(false)
     private val executor = Executors.newSingleThreadExecutor()
     private val writeExecutor = Executors.newSingleThreadExecutor()
-    private val peers = ConcurrentHashMap<String, String>()
+    private data class PeerInfo(val name: String, val publicKey: ByteArray)
+    private val peers = ConcurrentHashMap<String, PeerInfo>()
     private val writeLock = Any()
     @Volatile private var socket: SSLSocket? = null
     @Volatile private var writer: BufferedWriter? = null
@@ -93,6 +94,11 @@ class MeshRelayTransport(
         val now = System.currentTimeMillis()
         if (now - lastPingAt >= 20_000L) {
             if (sendJson(JSONObject().put("type", "ping"))) lastPingAt = now
+        }
+        // The relay's peer_online event is edge-triggered, not a heartbeat.
+        // Refresh lastSeen for peers that are still in the relay's live peer set.
+        peers.forEach { (id, peer) ->
+            onPeer(id, peer.name, peer.publicKey, "")
         }
         queue.snapshot().take(32).forEach { entry ->
             val packet = MeshPacket.decode(entry.bytes) ?: return@forEach
@@ -190,8 +196,9 @@ class MeshRelayTransport(
         if (id.isBlank() || id == localId) return
         val key = runCatching { Base64.decode(keyText, Base64.DEFAULT) }.getOrNull() ?: return
         if (key.isEmpty()) return
-        peers[id] = name.ifBlank { id.take(8) }
-        onPeer(id, name, key, "")
+        val safeName = name.ifBlank { id.take(8) }
+        peers[id] = PeerInfo(safeName, key)
+        onPeer(id, safeName, key, "")
         onPeerCount(peers.size)
     }
 

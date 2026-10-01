@@ -505,12 +505,8 @@ class MeshGattNode(
 
     private fun handleIncoming(from: String, bytes: ByteArray) {
         val packet = MeshPacket.decode(bytes) ?: run { Log.w(TAG, "packet_decode_failed peer=${from.takeLast(5)} bytes=${bytes.size}"); return }
-        // Any successfully decoded packet proves that BLE carried traffic, even if
-        // the HELLO/presence entry expired or the UI subscribed after the last update.
-        if (packet.sourceId.isNotBlank() && packet.sourceId != localId) {
-            peerLastSeenAt[packet.sourceId] = System.currentTimeMillis()
-            onPeerCountChanged(peerCount())
-        }
+        // Do not treat ordinary messages as presence. Presence is refreshed only
+        // by the explicit BLE HELLO/presence exchange in the GATT path.
         Log.d(TAG, "packet_decoded peer=${from.takeLast(5)} id=${packet.messageId} src=${packet.sourceId.take(8)} dst=${packet.destinationId.take(8)} local=${packet.destinationId == localId}")
         val next = router.onReceive(packet)
         if (packet.destinationId == localId) {

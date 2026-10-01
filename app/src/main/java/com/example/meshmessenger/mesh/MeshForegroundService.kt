@@ -236,7 +236,6 @@ class MeshForegroundService : Service() {
                 queue = queue,
                 onStatus = { updateNotification(it) },
                 onMessage = { text, sourceId, packet, _ ->
-                    rememberPeer(packet)
                     handleIncomingPersisted(text, sourceId, packet.messageId.toString(), ACTION_RELAY_MESSAGE)
                 },
                 onDeliveryAck = { packetId -> sendDeliveryStatus(packetId) },
@@ -284,7 +283,6 @@ class MeshForegroundService : Service() {
                     queue,
                     { updateNotification(it) },
                     { text, sourceId, packet ->
-                        rememberPeer(packet)
                         handleIncomingPersisted(text, sourceId, packet.messageId.toString(), ACTION_MESH_MESSAGE)
                     },
                     { nodeId, name, publicKey ->
@@ -319,21 +317,6 @@ class MeshForegroundService : Service() {
         sendMeshStatus(active)
     }
 
-
-    private fun rememberPeer(packet: MeshPacket) {
-        val name = packet.senderName.trim().ifBlank { packet.sourceId.take(8) }
-        val key = Base64.encodeToString(packet.senderPublicKey, Base64.NO_WRAP)
-        if (packet.sourceId.isNotBlank() && key.isNotBlank()) {
-            contacts.upsert(
-                ContactStore.Contact(
-                    nodeId = packet.sourceId,
-                    name = name,
-                    publicKeyBase64 = key,
-                    lastSeenAt = System.currentTimeMillis()
-                )
-            )
-        }
-    }
 
     private fun sendDeliveryStatus(packetId: String) {
         android.util.Log.i("MeshGattDiag", "delivery_status_broadcast packetId=$packetId")
