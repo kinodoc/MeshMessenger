@@ -168,8 +168,13 @@ class MeshGattNode(
         // Keep the 128-bit service UUID in the primary advertisement and put the
         // stable Node ID into the scan response. A connectable legacy BLE
         // advertisement is limited to 31 bytes, so both cannot safely fit there.
+        // Node IDs are 16 hex characters (8 bytes). Encode the ID as raw bytes
+        // instead of UTF-8 text: the 128-bit service UUID plus 8 bytes of node
+        // data fit in a legacy 31-byte BLE scan response. Sending the 16 ASCII
+        // characters made the payload too large and caused ADVERTISE_FAILED_DATA_TOO_LARGE (1).
+        val nodeIdBytes = localId.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
         val scanResponse = AdvertiseData.Builder()
-            .addServiceData(ParcelUuid(service), localId.toByteArray(StandardCharsets.UTF_8))
+            .addServiceData(ParcelUuid(service), nodeIdBytes)
             .build()
 
         advertiseCallback = object : AdvertiseCallback() {
@@ -200,8 +205,8 @@ class MeshGattNode(
                 val uuids = record.serviceUuids.orEmpty()
                 if (!uuids.any { it.uuid == service }) return
                 val advertisedNodeId = record.getServiceData(ParcelUuid(service))
-                    ?.toString(StandardCharsets.UTF_8)
-                    ?.trim()
+                    ?.joinToString("") { "%02x".format(it.toInt() and 0xff) }
+                    ?.takeIf { it.length == 16 }
                 if (advertisedNodeId == localId) return
                 connect(result.device, advertisedNodeId?.takeIf { it.isNotBlank() })
             }
