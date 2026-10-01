@@ -40,6 +40,7 @@ class MeshRelayTransport(
 
     private val running = AtomicBoolean(false)
     private val executor = Executors.newSingleThreadExecutor()
+    private val writeExecutor = Executors.newSingleThreadExecutor()
     private val peers = ConcurrentHashMap<String, String>()
     private val writeLock = Any()
     @Volatile private var socket: SSLSocket? = null
@@ -75,6 +76,7 @@ class MeshRelayTransport(
         peers.clear()
         onPeerCount(0)
         executor.shutdownNow()
+        writeExecutor.shutdownNow()
     }
 
     fun send(packet: MeshPacket, ignoredAddress: String = ""): Boolean {
@@ -193,16 +195,22 @@ class MeshRelayTransport(
         onPeerCount(peers.size)
     }
 
-    private fun sendJson(obj: JSONObject): Boolean = synchronized(writeLock) {
+    private fun sendJson(obj: JSONObject): Boolean {
         val out = writer ?: return false
-        return try {
-            out.write(obj.toString())
-            out.newLine()
-            out.flush()
-            true
-        } catch (e: Exception) {
-            Log.w(TAG, "write failed: ${e.javaClass.simpleName}")
-            false
-        }
+        return runCatching {
+            writeExecutor.execute {
+                synchronized(writeLock) {
+                    if (writer !== out || out.isClosed) return@synchronized
+                    try {
+                        out.write(obj.toString())
+                        out.newLine()
+                        out.flush()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "write failed: ${e.javaClass.simpleName}")
+                        runCatching { socket?.close() }
+                    }
+                }
+            }
+        }.isSuccess
     }
 }
