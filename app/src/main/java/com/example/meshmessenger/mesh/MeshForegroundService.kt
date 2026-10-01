@@ -60,10 +60,42 @@ class MeshForegroundService : Service() {
     private lateinit var chats: ChatStore
     private var blePeerCount = 0
     private var relayPeerCount = 0
+    private var nodeStartedAtMs = 0L
     private lateinit var diagnostics: MeshDiagnostics
     private lateinit var bluetoothMonitor: MeshBluetoothMonitor
 
     private val retryHandler = Handler(Looper.getMainLooper())
+
+    private val watchdogRunnable = object : Runnable {
+        override fun run() {
+            if (meshEnabled) {
+                val adapter = runCatching {
+                    (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+                }.getOrNull()
+                if (adapter?.isEnabled != true) {
+                    if (node != null) {
+                        diagnostics.event("BLE_WATCHDOG", "bluetooth_disabled")
+                        node?.stop()
+                        node = null
+                    }
+                    sendMeshStatus(false)
+                } else if (node == null) {
+                    diagnostics.event("BLE_WATCHDOG", "node_missing_restart")
+                    startMesh(startBle = true)
+                } else if (System.currentTimeMillis() - nodeStartedAtMs >= 30_000L && node?.isHealthy() != true) {
+                    diagnostics.event("BLE_WATCHDOG", "node_unhealthy_restart")
+                    node?.stop()
+                    node = null
+                    startMesh(startBle = true)
+                } else {
+                    sendMeshStatus(node?.isHealthy() == true)
+                }
+            } else {
+                sendMeshStatus(false)
+            }
+            retryHandler.postDelayed(this, 10_000L)
+        }
+    }
 
     private val retryRunnable = object : Runnable {
         override fun run() {
@@ -103,6 +135,7 @@ class MeshForegroundService : Service() {
         meshEnabled = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_ENABLED, true)
         // The internet relay stays active independently of the BLE mesh toggle.
         startMesh(startBle = meshEnabled)
+        retryHandler.postDelayed(watchdogRunnable, 10_000L)
     }
 
     override fun onStartCommand(
@@ -115,11 +148,11 @@ class MeshForegroundService : Service() {
             ACTION_APP_START -> {
                 updateNotification("Mesh Messenger работает")
                 if (meshEnabled && node == null) startMesh(startBle = true)
-                else sendMeshStatus(node != null)
+                else sendMeshStatus(node?.isHealthy() == true)
             }
 
             ACTION_MESH_STATUS_REQUEST -> {
-                sendMeshStatus(node != null)
+                sendMeshStatus(node?.isHealthy() == true)
             }
 
             ACTION_START -> {
@@ -166,8 +199,17 @@ class MeshForegroundService : Service() {
     private fun startMesh(startBle: Boolean) {
         diagnostics.event("MESH_START", "ble=$startBle")
         if (startBle && node != null) {
-            sendMeshStatus(true)
-            return
+            if (node?.isHealthy() == true) {
+                sendMeshStatus(true)
+                return
+            }
+            if (System.currentTimeMillis() - nodeStartedAtMs < 30_000L) {
+                sendMeshStatus(false)
+                return
+            }
+            diagnostics.event("BLE_WATCHDOG", "replacing_unhealthy_node")
+            node?.stop()
+            node = null
         }
 
         val identity = IdentityStore(this)
@@ -227,6 +269,7 @@ class MeshForegroundService : Service() {
 
         if (adapter != null) {
             runCatching {
+                nodeStartedAtMs = System.currentTimeMillis()
                 node = MeshGattNode(
                     this,
                     adapter,
@@ -267,8 +310,8 @@ class MeshForegroundService : Service() {
             }
         }
 
-        val active = node != null
-        updateNotification(if (active) "Mesh работает" else "Mesh не удалось запустить")
+        val active = node?.isHealthy() == true
+        updateNotification(if (active) "Mesh работает" else "Mesh запускается / требуется проверка")
         sendMeshStatus(active)
     }
 
@@ -418,6 +461,8 @@ class MeshForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        retryHandler.removeCallbacks(watchdogRunnable)
+        retryHandler.removeCallbacks(retryRunnable)
         bluetoothMonitor.stop()
         stopMesh()
         stopRelayLayer()

@@ -33,6 +33,9 @@ class MeshGattNode(
 ) {
     private val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private var server: BluetoothGattServer? = null
+    @Volatile private var gattServerReady = false
+    @Volatile private var advertisingStarted = false
+    @Volatile private var scanningStarted = false
     private var advertiser: BluetoothLeAdvertiser? = null
     private var advertiseCallback: AdvertiseCallback? = null
     private var scanner: BluetoothLeScanner? = null
@@ -91,6 +94,7 @@ class MeshGattNode(
         server = manager.openGattServer(context, object : BluetoothGattServerCallback() {
             override fun onServiceAdded(status: Int, service: BluetoothGattService) {
                 if (service.uuid == this@MeshGattNode.service && status == BluetoothGatt.GATT_SUCCESS) {
+                    gattServerReady = true
                     startBleAdvertisingAndScan()
                 } else if (service.uuid == this@MeshGattNode.service) {
                     onStatus("BLE: сервис GATT не запущен: " + status)
@@ -183,6 +187,7 @@ class MeshGattNode(
         var retriedWithoutScanResponse = false
         advertiseCallback = object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
+                advertisingStarted = true
                 onDiagnostic(
                     "BLE_ADVERTISE",
                     if (retriedWithoutScanResponse) {
@@ -194,6 +199,7 @@ class MeshGattNode(
                 onStatus("Mesh активен • BLE relay готов")
             }
             override fun onStartFailure(errorCode: Int) {
+                advertisingStarted = false
                 onDiagnostic("BLE_ADVERTISE", "failed code=" + errorCode)
                 // Some Android 11/OEM Bluetooth stacks reject a perfectly valid
                 // 128-bit service-data scan response as "data too large" (1).
@@ -239,12 +245,13 @@ class MeshGattNode(
                 connect(result.device, advertisedNodeId?.takeIf { it.isNotBlank() })
             }
             override fun onScanFailed(errorCode: Int) {
+                scanningStarted = false
                 onDiagnostic("BLE_SCAN", "failed code=" + errorCode)
                 onStatus("BLE scan error: " + errorCode)
             }
         }
         runCatching { bleScanner.startScan(null, scanSettings, scanCallback) }
-            .onSuccess { onDiagnostic("BLE_SCAN", "started mode=BALANCED") }
+            .onSuccess { scanningStarted = true; onDiagnostic("BLE_SCAN", "started mode=BALANCED") }
             .onFailure { onDiagnostic("BLE_SCAN", "start_exception=" + it.javaClass.simpleName) }
     }
 
@@ -671,10 +678,21 @@ class MeshGattNode(
 
     fun onlinePeerCount(): Int = peerCount()
 
+    /** True only when the GATT server, BLE advertiser and BLE scanner are all running. */
+    fun isHealthy(): Boolean = runCatching {
+        adapter.isEnabled && gattServerReady && server != null &&
+            advertisingStarted && advertiser != null &&
+            scanningStarted && scanner != null
+    }.getOrDefault(false)
+
     fun stop() {
+        gattServerReady = false
+        advertisingStarted = false
+        scanningStarted = false
         scanner?.let { sc -> scanCallback?.let { cb -> sc.stopScan(cb) } }
         scanCallback = null
         scanner = null
+        scanningStarted = false
         val adv = advertiser
         val callback = advertiseCallback
         if (adv != null && callback != null) {
@@ -683,6 +701,7 @@ class MeshGattNode(
         }
         advertiseCallback = null
         advertiser = null
+        advertisingStarted = false
         peers.values.forEach { runCatching { it.close() } }
         peers.clear()
         serverClients.clear()
