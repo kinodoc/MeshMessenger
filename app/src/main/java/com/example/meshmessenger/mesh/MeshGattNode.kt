@@ -43,6 +43,9 @@ class MeshGattNode(
     // so one physical peer cannot create several GATT connections/counts.
     private val connectingNodeIds = ConcurrentHashMap.newKeySet<String>()
     private val peerNodeIds = ConcurrentHashMap<String, String>()
+    // Presence is keyed by the stable Mesh Node ID, not by BLE address or GATT connection.
+    // A phone may advertise many times and may rotate its BLE address; it is still one peer.
+    private val peerLastSeenAt = ConcurrentHashMap<String, Long>()
     private val notifyReady = mutableSetOf<String>()
     private val service = MeshProtocol.SERVICE_UUID
     private val rx = MeshProtocol.RX_UUID
@@ -60,6 +63,7 @@ class MeshGattNode(
         private const val MAX_FRAGMENTS = 65535
         private const val REASSEMBLY_TIMEOUT_MS = 30_000L
         private const val DELIVERY_RETRY_MS = 10_000L
+        private const val PEER_PRESENCE_TTL_MS = 30_000L
     }
 
     private data class Assembly(
@@ -380,6 +384,7 @@ class MeshGattNode(
                 }
                 val key = runCatching { Base64.getDecoder().decode(parts[3]) }.getOrNull()
                 if (key != null && key.isNotEmpty()) {
+                    peerLastSeenAt[peerId] = System.currentTimeMillis()
                     onPeer(peerId, parts[2].ifBlank { peerId.take(8) }, key)
                     onPeerCountChanged(peerCount())
                 }
@@ -495,6 +500,7 @@ class MeshGattNode(
      */
     @SuppressLint("MissingPermission")
     fun retryPending() {
+        onPeerCountChanged(peerCount())
         if (peers.isEmpty() && serverClients.isEmpty()) return
         flushQueue()
     }
@@ -612,7 +618,13 @@ class MeshGattNode(
         }
     }
 
-    private fun peerCount(): Int = peerNodeIds.values.distinct().size
+    private fun peerCount(): Int {
+        val now = System.currentTimeMillis()
+        peerLastSeenAt.entries.removeIf { now - it.value > PEER_PRESENCE_TTL_MS }
+        return peerLastSeenAt.count { now - it.value <= PEER_PRESENCE_TTL_MS }
+    }
+
+    fun onlinePeerCount(): Int = peerCount()
 
     fun stop() {
         scanner?.let { sc -> scanCallback?.let { cb -> sc.stopScan(cb) } }
@@ -632,6 +644,7 @@ class MeshGattNode(
         connecting.clear()
         connectingNodeIds.clear()
         peerNodeIds.clear()
+        peerLastSeenAt.clear()
         notifyReady.clear()
         notificationQueues.clear()
         notifying.clear()

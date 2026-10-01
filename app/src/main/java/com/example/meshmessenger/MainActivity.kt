@@ -757,7 +757,7 @@ class MainActivity : ComponentActivity() {
             if (intent?.action != MeshForegroundService.ACTION_PEER_STATUS) return
             val ble = intent.getIntExtra(MeshForegroundService.EXTRA_BLE_COUNT, 0)
             val netBirdPeers = intent.getIntExtra(MeshForegroundService.EXTRA_NETBIRD_COUNT, 0)
-            peerStatus.text = "BLE $ble   •   NetBird $netBirdPeers"
+            peerStatus.text = "BLE $ble   •   NetBird $netBirdPeers   •   онлайн через любой канал"
         }
     }
 
