@@ -1,5 +1,10 @@
 <resources>
     <style name="Theme.MeshMessenger" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#07162B</item>
+        <item name="android:navigationBarColor">#02050A</item>
+        <item name="android:windowBackground">#050B16</item>
+        <item name="android:colorAccent">#5B7CFF</item>
     </style>
 </resources>

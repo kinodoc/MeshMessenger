@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -19,6 +20,7 @@ import android.widget.*
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
+import androidx.core.content.ContextCompat
 import com.example.meshmessenger.mesh.*
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.MultiFormatWriter
@@ -142,50 +144,152 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun buildHome() {
-        status = TextView(this).apply { textSize = 17f; setPadding(24, 24, 24, 12) }
-        log = TextView(this).apply { setPadding(24, 12, 24, 12) }
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(16, 8, 16, 16) }
-        root.addView(status)
-        root.addView(TextView(this).apply { text = "Мой Node ID: ${identity.nodeId}" })
-        root.addView(Button(this).apply { text = "Имя: ${identity.displayName}"; setOnClickListener { editOwnName() } })
-        root.addView(TextView(this).apply { text = "Версия приложения: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"; setPadding(0, 4, 0, 4) })
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-        netBirdStatus = TextView(this).apply { setPadding(0, 10, 0, 6); textSize = 16f }
+    private fun homeText(textValue: String, size: Float = 16f): TextView =
+        TextView(this).apply {
+            text = textValue
+            textSize = size
+            setTextColor(Color.rgb(210, 226, 255))
+            setPadding(0, dp(5), 0, dp(5))
+        }
+
+    private fun actionButton(label: String, icon: Int, onClick: () -> Unit): Button =
+        Button(this).apply {
+            text = label
+            textSize = 15f
+            setTextColor(Color.rgb(211, 229, 255))
+            isAllCaps = false
+            gravity = android.view.Gravity.CENTER
+            minHeight = dp(56)
+            minimumHeight = dp(56)
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_home_button)
+            setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0)
+            compoundDrawablePadding = dp(14)
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            setOnClickListener { onClick() }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(56)
+            ).apply { setMargins(0, dp(7), 0, dp(7)) }
+        }
+
+    private fun buildHome() {
+        val scroll = ScrollView(this).apply {
+            setBackgroundColor(Color.rgb(5, 11, 22))
+            isFillViewport = true
+        }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(10), dp(16), dp(18))
+        }
+        scroll.addView(root)
+
+        status = TextView(this).apply {
+            textSize = 22f
+            setTextColor(Color.rgb(211, 229, 255))
+            setPadding(dp(8), dp(8), dp(8), dp(4))
+        }
+        root.addView(status)
+        root.addView(homeText("Мой Node ID: ${identity.nodeId}", 16f))
+
+        root.addView(Button(this).apply {
+            text = "ИМЯ: ${identity.displayName}"
+            textSize = 16f
+            setTextColor(Color.rgb(211, 229, 255))
+            isAllCaps = false
+            gravity = android.view.Gravity.CENTER
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_name)
+            setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_person, 0, 0, 0)
+            compoundDrawablePadding = dp(12)
+            setPadding(dp(16), dp(5), dp(16), dp(5))
+            minHeight = dp(54)
+            setOnClickListener { editOwnName() }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(54)
+            ).apply { setMargins(0, dp(6), 0, dp(8)) }
+        })
+
+        root.addView(homeText("Версия приложения: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", 15f))
+
+        netBirdStatus = TextView(this).apply {
+            textSize = 15f
+            setTextColor(Color.rgb(211, 229, 255))
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_home_card)
+            setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_network, 0, 0, 0)
+            compoundDrawablePadding = dp(12)
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(64)
+            ).apply { setMargins(0, dp(6), 0, dp(5)) }
+        }
         root.addView(netBirdStatus)
-        peerStatus = TextView(this).apply { setPadding(0, 2, 0, 8); textSize = 15f; text = "BLE 0   •   NetBird 0" }
+
+        peerStatus = TextView(this).apply {
+            textSize = 15f
+            setTextColor(Color.rgb(105, 210, 255))
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_channel)
+            setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_channel_off, 0, 0, 0)
+            compoundDrawablePadding = dp(12)
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(62)
+            ).apply { setMargins(0, dp(5), 0, dp(8)) }
+        }
         root.addView(peerStatus)
+
         root.addView(Switch(this).apply {
             text = "Только внутренняя сеть"
+            textSize = 16f
+            setTextColor(Color.rgb(211, 229, 255))
+            setPadding(dp(4), dp(2), 0, dp(2))
             isChecked = netBird.onlyNetBird
             setOnCheckedChangeListener { _, checked ->
                 netBird.onlyNetBird = checked
                 updateNetBirdStatus()
                 log.text = if (checked) "Режим только внутренней сети включён: IP-трафик разрешён только через внутреннюю сеть." else "Режим только внутренней сети выключен."
             }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(54)
+            )
         })
 
-        meshButton = Button(this).apply { text = "▶ Запустить mesh"; setOnClickListener { if (meshActive) { startService(Intent(this@MainActivity, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_STOP)) } else { requestMeshPermissions() } } }; root.addView(meshButton)
-        root.addView(Button(this).apply { text = "🔋 Состояние фоновой работы"; setOnClickListener { showBatteryStatus() } })
-        root.addView(Button(this).apply { text = "＋ Добавить контакт"; setOnClickListener { addContactDialog() } })
-        root.addView(Button(this).apply { text = "▣ Мой QR-код"; setOnClickListener { showOwnQr() } })
-        root.addView(Button(this).apply { text = "Контакты"; setOnClickListener { contactsDialog() } })
-        root.addView(Button(this).apply { text = "↻ Проверить обновление"; setOnClickListener { checkForUpdates(true) } })
-        root.addView(Button(this).apply { text = "🐞 Отправить bugreport"; setOnClickListener { shareBugReport() } })
-        updateStatus = TextView(this).apply {
-            textSize = 15f
-            setPadding(0, 2, 0, 8)
-            text = ""
+        meshButton = actionButton(
+            if (meshActive) "ОСТАНОВИТЬ MESH" else "ЗАПУСТИТЬ MESH",
+            R.drawable.ic_stop
+        ) {
+            if (meshActive) {
+                startService(Intent(this@MainActivity, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_STOP))
+            } else {
+                requestMeshPermissions()
+            }
+        }
+        root.addView(meshButton)
+
+        root.addView(actionButton("СОСТОЯНИЕ ФОНОВОЙ РАБОТЫ", R.drawable.ic_battery) { showBatteryStatus() })
+        root.addView(actionButton("ДОБАВИТЬ КОНТАКТ", R.drawable.ic_add) { addContactDialog() })
+        root.addView(actionButton("МОЙ QR-КОД", R.drawable.ic_qr) { showOwnQr() })
+        root.addView(actionButton("КОНТАКТЫ", R.drawable.ic_contacts) { contactsDialog() })
+        root.addView(actionButton("ПРОВЕРИТЬ ОБНОВЛЕНИЕ", R.drawable.ic_update) { checkForUpdates(true) })
+        root.addView(actionButton("ОТПРАВИТЬ BUGREPORT", R.drawable.ic_bug) { shareBugReport() })
+
+        updateStatus = homeText("", 14f).apply {
+            setPadding(dp(2), dp(8), dp(2), dp(4))
         }
         root.addView(updateStatus)
+
         root.addView(TextView(this).apply {
-            text = "Сделал Дмитрий Шалимов"
+            text = "СДЕЛАЛ ДМИТРИЙ ШАЛИМОВ"
+            textSize = 15f
+            setTextColor(Color.rgb(211, 229, 255))
             gravity = android.view.Gravity.CENTER
-            setTextAppearance(android.R.style.TextAppearance_Material_Button)
-            setPadding(0, 16, 0, 8)
+            setPadding(0, dp(12), 0, dp(8))
         })
-        setContentView(root)
-        status.text = "Mesh Messenger готов • контактов: ${contacts.all().size}"
+
+        setContentView(scroll)
+        status.text = if (meshActive) "Mesh активен" else "Mesh выключен"
+        updateNetBirdStatus()
     }
 
 
@@ -760,11 +864,23 @@ class MainActivity : ComponentActivity() {
             if (intent?.action != MeshForegroundService.ACTION_PEER_STATUS) return
             val ble = intent.getIntExtra(MeshForegroundService.EXTRA_BLE_COUNT, 0)
             val netBirdPeers = intent.getIntExtra(MeshForegroundService.EXTRA_NETBIRD_COUNT, 0)
-            peerStatus.text = when {
-                ble > 0 && netBirdPeers > 0 -> "КАНАЛЫ: BLE • NetBird"
-                ble > 0 -> "КАНАЛ: BLE"
-                netBirdPeers > 0 -> "КАНАЛ: NetBird"
-                else -> "КАНАЛ: —"
+            when {
+                ble > 0 && netBirdPeers > 0 -> {
+                    peerStatus.text = "КАНАЛ    BLE  +  Внутренняя сеть"
+                    peerStatus.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_network, 0, 0, 0)
+                }
+                ble > 0 -> {
+                    peerStatus.text = "КАНАЛ    BLE"
+                    peerStatus.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_bluetooth_mesh, 0, 0, 0)
+                }
+                netBirdPeers > 0 -> {
+                    peerStatus.text = "КАНАЛ    Внутренняя сеть"
+                    peerStatus.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_network, 0, 0, 0)
+                }
+                else -> {
+                    peerStatus.text = "КАНАЛ    Не установлен"
+                    peerStatus.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_channel_off, 0, 0, 0)
+                }
             }
         }
     }
