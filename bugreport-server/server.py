@@ -38,9 +38,27 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        if self.path != "/health":
+        if self.path == "/health":
+            return self.respond(200, {"ok": True, "service": "mesh-bugreport"})
+        match = re.fullmatch(r"/reports/([A-Za-z0-9_-]{20,40})\\.zip", self.path)
+        if not match:
             return self.respond(404, {"ok": False, "error": "not_found"})
-        self.respond(200, {"ok": True, "service": "mesh-bugreport"})
+        target = REPORT_DIR / (match.group(1) + ".zip")
+        try:
+            if time.time() - target.stat().st_mtime > 7 * 86400:
+                target.unlink(missing_ok=True)
+                return self.respond(410, {"ok": False, "error": "report_expired"})
+            data = target.read_bytes()
+        except FileNotFoundError:
+            return self.respond(404, {"ok": False, "error": "not_found"})
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", 'attachment; filename="MeshMessenger-bugreport.zip"')
+        self.send_header("Cache-Control", "private, max-age=0, no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_POST(self):
         if self.path != "/api/bugreports":
