@@ -83,11 +83,12 @@ class MeshGattNode(
     )
 
     private val assemblies = ConcurrentHashMap<String, MutableMap<UUID, Assembly>>()
-    private data class WriteTask(val messageId: UUID, val fragments: List<ByteArray>)
+    private data class WriteTask(val messageId: UUID, val fragments: List<ByteArray>, val attempts: Int = 0)
     private val writeQueues = mutableMapOf<String, ArrayDeque<WriteTask>>()
     private val writing = mutableSetOf<String>()
     private val helloWriting = mutableSetOf<String>()
     private val notificationQueues = mutableMapOf<String, ArrayDeque<ByteArray>>()
+    private val notificationRetryCounts = mutableMapOf<String, Int>()
     private val notifying = mutableSetOf<String>()
     // A successful GATT write only confirms the characteristic write callback.
     // Keep the durable packet until the destination sends the application ACK.
@@ -141,15 +142,29 @@ class MeshGattNode(
                 val q = notificationQueues[address]
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     q?.removeFirstOrNull()
+                    notificationRetryCounts.remove(address)
                     onDiagnostic("BLE_NOTIFY_TX", "success address=**${address.takeLast(5)} remaining=${q?.size ?: 0}")
+                    if (q?.isEmpty() == true) notificationQueues.remove(address)
+                    flushNotificationQueue(address)
                 } else {
                     onDiagnostic("BLE_NOTIFY_TX", "failed address=**${address.takeLast(5)} status=$status")
                     onStatus("BLE: ошибка уведомления $status")
-                    // Drop only the failed fragment; the next queued fragment can still proceed.
-                    q?.removeFirstOrNull()
+                    val attempt = (notificationRetryCounts[address] ?: 0) + 1
+                    notificationRetryCounts[address] = attempt
+                    if (status == 1 /* GATT_INVALID_HANDLE */ || status == 133 /* GATT_ERROR */ || attempt > 3) {
+                        onDiagnostic("BLE_GATT_RECOVERY", "notify_disconnect address=**${address.takeLast(5)} status=$status attempt=$attempt")
+                        notificationRetryCounts.remove(address)
+                        val device = serverClients[address] ?: peers[address]?.device
+                        if (device != null) runCatching { server?.cancelConnection(device) }
+                        peers[address]?.let { runCatching { it.disconnect() } }
+                    } else {
+                        val delayMs = 250L * attempt * attempt
+                        onDiagnostic("BLE_NOTIFY_TX", "retry_scheduled address=**${address.takeLast(5)} attempt=$attempt delay_ms=$delayMs")
+                        mainHandler.postDelayed({
+                            if (running && notificationQueues[address]?.isNotEmpty() == true && notifyReady.contains(address)) flushNotificationQueue(address)
+                        }, delayMs)
+                    }
                 }
-                if (q?.isEmpty() == true) notificationQueues.remove(address)
-                flushNotificationQueue(address)
             }
         })
         val gattService = BluetoothGattService(service, BluetoothGattService.SERVICE_TYPE_PRIMARY)
@@ -393,28 +408,27 @@ class MeshGattNode(
                         "callback address=**${address.takeLast(5)} status=${status}"
                     )
                     if (status != BluetoothGatt.GATT_SUCCESS) {
-                        onDiagnostic("BLE_HELLO_WRITE", "failed status=${status}")
-                        onStatus("BLE: HELLO не отправлен (код ${status})")
-                    } else {
-                        onDiagnostic("BLE_HELLO_WRITE", "success")
-                    }
-                    flushPeerQueue(address)
-                    return
-                }
-                if (status != BluetoothGatt.GATT_SUCCESS) {
                     onDiagnostic("BLE_WRITE_TX", "failed address=**${address.takeLast(5)} status=$status")
                     writing.remove(address)
                     onStatus("BLE: ошибка записи " + status)
-                    if (status == 1 /* GATT_INVALID_HANDLE */ || status == 133 /* GATT_ERROR */) {
-                        // The remote GATT handle is invalid. Retrying on this same
-                        // connection creates a rapid failure loop; reconnect and
-                        // rediscover services before attempting queued packets again.
-                        onDiagnostic("BLE_GATT_RECOVERY", "invalid_handle_disconnect address=**${address.takeLast(5)}")
+                    val queueForPeer = writeQueues[address]
+                    val task = queueForPeer?.firstOrNull()
+                    val attempt = (task?.attempts ?: 0) + 1
+                    if (status == 1 /* GATT_INVALID_HANDLE */ || status == 133 /* GATT_ERROR */ || attempt > 3) {
+                        onDiagnostic("BLE_GATT_RECOVERY", "write_disconnect address=**${address.takeLast(5)} status=$status attempt=$attempt")
                         notifyReady.remove(address)
                         runCatching { g.disconnect() }
                             .onFailure { onDiagnostic("BLE_GATT_RECOVERY", "disconnect_exception=" + it.javaClass.simpleName) }
                     } else {
-                        flushPeerQueue(address)
+                        if (task != null && queueForPeer != null) {
+                            queueForPeer.removeFirst()
+                            queueForPeer.addFirst(task.copy(attempts = attempt))
+                        }
+                        val delayMs = 250L * attempt * attempt
+                        onDiagnostic("BLE_WRITE_TX", "retry_scheduled address=**${address.takeLast(5)} attempt=$attempt delay_ms=$delayMs")
+                        mainHandler.postDelayed({
+                            if (running && peers.containsKey(address) && notifyReady.contains(address)) flushPeerQueue(address)
+                        }, delayMs)
                     }
                     return
                 }
@@ -429,7 +443,7 @@ class MeshGattNode(
                             awaitingDelivery.getOrPut(address) { mutableMapOf() }[task.messageId] = System.currentTimeMillis()
                         }
                     } else {
-                        queueForPeer.addFirst(task.copy(fragments = remaining))
+                        queueForPeer.addFirst(task.copy(fragments = remaining, attempts = 0))
                     }
                     if (queueForPeer.isEmpty()) writeQueues.remove(address)
                 }
@@ -743,6 +757,23 @@ class MeshGattNode(
         if (!started) {
             writing.remove(address)
             onStatus("BLE: запись занята")
+            val queueForPeer = writeQueues[address]
+            val task = queueForPeer?.firstOrNull()
+            if (task != null && queueForPeer != null) {
+                val attempt = task.attempts + 1
+                if (attempt > 3) {
+                    onDiagnostic("BLE_WRITE_TX", "start_rejected_disconnect address=**${address.takeLast(5)} attempts=$attempt")
+                    runCatching { gatt.disconnect() }
+                } else {
+                    queueForPeer.removeFirst()
+                    queueForPeer.addFirst(task.copy(attempts = attempt))
+                    val delayMs = 250L * attempt * attempt
+                    onDiagnostic("BLE_WRITE_TX", "start_retry_scheduled address=**${address.takeLast(5)} attempt=$attempt delay_ms=$delayMs")
+                    mainHandler.postDelayed({
+                        if (running && peers.containsKey(address) && notifyReady.contains(address)) flushPeerQueue(address)
+                    }, delayMs)
+                }
+            }
         }
     }
 
@@ -775,8 +806,19 @@ class MeshGattNode(
             notifying.add(address)
         } else {
             onStatus("BLE: уведомление не запущено")
-            notificationQueues[address]?.removeFirstOrNull()
-            if (notificationQueues[address]?.isEmpty() == true) notificationQueues.remove(address)
+            val attempt = (notificationRetryCounts[address] ?: 0) + 1
+            notificationRetryCounts[address] = attempt
+            if (attempt > 3) {
+                onDiagnostic("BLE_NOTIFY_TX", "start_rejected_disconnect address=**${address.takeLast(5)} attempts=$attempt")
+                notificationRetryCounts.remove(address)
+                runCatching { server?.cancelConnection(device) }
+            } else {
+                val delayMs = 250L * attempt * attempt
+                onDiagnostic("BLE_NOTIFY_TX", "start_retry_scheduled address=**${address.takeLast(5)} attempt=$attempt delay_ms=$delayMs")
+                mainHandler.postDelayed({
+                    if (running && notificationQueues[address]?.isNotEmpty() == true && notifyReady.contains(address)) flushNotificationQueue(address)
+                }, delayMs)
+            }
         }
     }
 
@@ -850,6 +892,7 @@ class MeshGattNode(
         peerLastSeenAt.clear()
         notifyReady.clear()
         notificationQueues.clear()
+        notificationRetryCounts.clear()
         notifying.clear()
         awaitingDelivery.clear()
         assemblies.clear()
