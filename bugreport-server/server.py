@@ -50,17 +50,17 @@ def fingerprint_zip(data):
                 except (KeyError, OSError, RuntimeError, zipfile.BadZipFile):
                     continue
                 # Ignore volatile fields while retaining error/stack details.
-                text = re.sub(r"(?im)^.*(?:timestamp|time|date|device.?id|node.?id|mac|ip address)\\s*[:=].*$", "", text)
-                text = re.sub(r"\\b[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}\\b", "<UUID>", text)
-                text = re.sub(r"\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b", "<IP>", text)
-                text = re.sub(r"\\b\\d{10,13}\\b", "<TIME>", text)
-                text = re.sub(r"\\s+", " ", text).strip().lower()
+                text = re.sub(r"(?im)^.*(?:timestamp|time|date|device.?id|node.?id|mac|ip address)\s*[:=].*$", "", text)
+                text = re.sub(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}\b", "<UUID>", text)
+                text = re.sub(r"\b(?:\\d{1,3}\\.){3}\\d{1,3}\b", "<IP>", text)
+                text = re.sub(r"\b\\d{10,13}\b", "<TIME>", text)
+                text = re.sub(r"\s+", " ", text).strip().lower()
                 if text:
                     parts.append(info.filename.lower() + ":" + text[:200_000])
     except (zipfile.BadZipFile, OSError, ValueError):
         raise ValueError("invalid_zip")
     # Empty/opaque archives include their content digest to avoid false global duplicates.
-    basis = "\\n".join(parts) if parts else "opaque:" + hashlib.sha256(data).hexdigest()
+    basis = "\n".join(parts) if parts else "opaque:" + hashlib.sha256(data).hexdigest()
     return hashlib.sha256(basis.encode("utf-8", "replace")).hexdigest()
 
 class Handler(BaseHTTPRequestHandler):
