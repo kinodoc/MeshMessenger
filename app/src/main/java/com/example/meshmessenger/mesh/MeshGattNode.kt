@@ -405,7 +405,17 @@ class MeshGattNode(
                     onDiagnostic("BLE_WRITE_TX", "failed address=**${address.takeLast(5)} status=$status")
                     writing.remove(address)
                     onStatus("BLE: ошибка записи " + status)
-                    flushPeerQueue(address)
+                    if (status == BluetoothGatt.GATT_INVALID_HANDLE) {
+                        // The remote GATT handle is invalid. Retrying on this same
+                        // connection creates a rapid failure loop; reconnect and
+                        // rediscover services before attempting queued packets again.
+                        onDiagnostic("BLE_GATT_RECOVERY", "invalid_handle_disconnect address=**${address.takeLast(5)}")
+                        notifyReady.remove(address)
+                        runCatching { g.disconnect() }
+                            .onFailure { onDiagnostic("BLE_GATT_RECOVERY", "disconnect_exception=" + it.javaClass.simpleName) }
+                    } else {
+                        flushPeerQueue(address)
+                    }
                     return
                 }
                 onDiagnostic("BLE_WRITE_TX", "success address=**${address.takeLast(5)}")
