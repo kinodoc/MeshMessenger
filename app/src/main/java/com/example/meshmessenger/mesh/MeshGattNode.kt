@@ -600,7 +600,19 @@ class MeshGattNode(
         Log.d(TAG, "packet_decoded peer=${from.takeLast(5)} id=${packet.messageId} src=${packet.sourceId.take(8)} dst=${packet.destinationId.take(8)} local=${packet.destinationId == localId}")
         val next = router.onReceive(packet)
         if (packet.destinationId == localId) {
-            val text = router.decryptForLocal(packet) ?: "[не удалось расшифровать]"
+            val decryptedText = router.decryptForLocal(packet)
+            if (decryptedText != null && packet.senderPublicKey.isNotEmpty()) {
+                // An authenticated locally addressed packet proves the sender is reachable.
+                // Refresh presence even if an OEM BLE stack misses periodic HELLO notifications.
+                peerLastSeenAt[packet.sourceId] = System.currentTimeMillis()
+                onPeer(
+                    packet.sourceId,
+                    packet.senderName.ifBlank { packet.sourceId.take(8) },
+                    packet.senderPublicKey
+                )
+                onDiagnostic("BLE_PRESENCE_RX", "source=${packet.sourceId.take(8)} via=authenticated_packet")
+            }
+            val text = decryptedText ?: "[не удалось расшифровать]"
             if (text.startsWith(MeshRouter.DELIVERY_ACK_PREFIX)) {
                 val deliveredId = text.removePrefix(MeshRouter.DELIVERY_ACK_PREFIX)
                 Log.i(TAG, "delivery_ack_received ackPacket=${packet.messageId} deliveredId=$deliveredId src=${packet.sourceId.take(8)}")
