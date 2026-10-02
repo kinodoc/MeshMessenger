@@ -405,7 +405,7 @@ class MeshGattNode(
                     onDiagnostic("BLE_WRITE_TX", "failed address=**${address.takeLast(5)} status=$status")
                     writing.remove(address)
                     onStatus("BLE: ошибка записи " + status)
-                    if (status == 1 /* GATT_INVALID_HANDLE */) {
+                    if (status == 1 /* GATT_INVALID_HANDLE */ || status == 133 /* GATT_ERROR */) {
                         // The remote GATT handle is invalid. Retrying on this same
                         // connection creates a rapid failure loop; reconnect and
                         // rediscover services before attempting queued packets again.
