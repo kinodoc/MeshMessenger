@@ -408,6 +408,18 @@ class MeshGattNode(
                         "callback address=**${address.takeLast(5)} status=${status}"
                     )
                     if (status != BluetoothGatt.GATT_SUCCESS) {
+                        onDiagnostic("BLE_HELLO_WRITE", "failed address=**${address.takeLast(5)} status=$status")
+                        onStatus("BLE: HELLO не отправлен ($status)")
+                        notifyReady.remove(address)
+                        runCatching { g.disconnect() }
+                            .onFailure { onDiagnostic("BLE_GATT_RECOVERY", "hello_disconnect_exception=" + it.javaClass.simpleName) }
+                    }
+                    // HELLO shares the RX characteristic with packet writes. Do not
+                    // process this callback as if it completed a queued message.
+                    return
+                }
+
+                if (status != BluetoothGatt.GATT_SUCCESS) {
                     onDiagnostic("BLE_WRITE_TX", "failed address=**${address.takeLast(5)} status=$status")
                     writing.remove(address)
                     onStatus("BLE: ошибка записи " + status)
@@ -432,6 +444,7 @@ class MeshGattNode(
                     }
                     return
                 }
+
                 onDiagnostic("BLE_WRITE_TX", "success address=**${address.takeLast(5)}")
                 val queueForPeer = writeQueues[address]
                 val task = queueForPeer?.firstOrNull()
