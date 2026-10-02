@@ -1,0 +1,27 @@
+[Unit]
+Description=MeshMessenger GitHub bug-report receiver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=meshbugreport
+Group=meshbugreport
+EnvironmentFile=/etc/mesh-bugreport.env
+ExecStart=/usr/bin/python3 /opt/mesh-bugreport/server.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/mesh-bugreports
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target
