@@ -482,8 +482,6 @@ class MainActivity : ComponentActivity() {
                             runOnUiThread {
                                 sendEnabled = true
                                 send.isEnabled = true
-                                sendEnabled = true
-                                send.isEnabled = true
                                 upload.onSuccess { message ->
                                     result.setTextColor(Color.rgb(0, 240, 180))
                                     result.text = message
