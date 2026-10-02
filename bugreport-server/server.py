@@ -65,7 +65,7 @@ class Handler(BaseHTTPRequestHandler):
         if content_type != "application/zip":
             return self.respond(415, {"ok": False, "error": "expected_zip"})
         body = self.rfile.read(length)
-        if len(body) != length or not (body.startswith(b"PK\\x03\\x04") or body.startswith(b"PK\\x05\\x06")):
+        if len(body) != length or not (body.startswith(b"PK\x03\x04") or body.startswith(b"PK\x05\x06")):
             return self.respond(400, {"ok": False, "error": "invalid_zip"})
         version = re.sub(r"[^A-Za-z0-9._+-]", "", self.headers.get("X-Mesh-Version", "unknown"))[:40] or "unknown"
         report_id = secrets.token_urlsafe(18)
@@ -77,9 +77,9 @@ class Handler(BaseHTTPRequestHandler):
             report_url = PUBLIC_BASE_URL + "/reports/" + report_id + ".zip"
             title = "MeshMessenger bugreport (" + version + ")"
             issue_body = (
-                "Автоматический багрепорт из MeshMessenger.\\n\\n"
-                "- Версия приложения: " + version + "\\n"
-                "- Архив диагностики: " + report_url + "\\n\\n"
+                "Автоматический багрепорт из MeshMessenger.\n\n"
+                "- Версия приложения: " + version + "\n"
+                "- Архив диагностики: " + report_url + "\n\n"
                 "Архив содержит техническую диагностику устройства. Не публикуйте в нём "
                 "личные данные; доступ к ссылке следует ограничить сроком хранения."
             )
