@@ -32,6 +32,9 @@ import com.journeyapps.barcodescanner.ScanOptions
 import com.google.zxing.common.BitMatrix
 import java.nio.charset.StandardCharsets
 import java.util.Base64
+import java.net.HttpURLConnection
+import java.net.URL
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     private var sendEnabled = true
@@ -448,19 +451,50 @@ class MainActivity : ComponentActivity() {
                     sendEnabled = true
                     send.isEnabled = true
                     outcome.onSuccess { report ->
-                        result.setTextColor(Color.rgb(255, 190, 90))
-                        result.text = "Не удалось отправить багрепорт автоматически: авторизация GitHub для приложения ещё не настроена. ZIP сформирован: ${report.name}"
-                        runCatching {
-                            val uri = FileProvider.getUriForFile(this, "${BuildConfig.APPLICATION_ID}.fileprovider", report)
-                            val share = Intent(Intent.ACTION_SEND).apply {
-                                type = "application/zip"
-                                putExtra(Intent.EXTRA_STREAM, uri)
-                                putExtra(Intent.EXTRA_SUBJECT, "MeshMessenger bugreport ${BuildConfig.VERSION_NAME}")
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        result.text = "Отправляем отчёт на защищённый сервер…"
+                        Thread {
+                            val upload = runCatching {
+                                val connection = URL("https://194.87.186.159/api/bugreports").openConnection() as HttpURLConnection
+                                try {
+                                    connection.requestMethod = "POST"
+                                    connection.connectTimeout = 10000
+                                    connection.readTimeout = 20000
+                                    connection.doOutput = true
+                                    connection.setRequestProperty("Content-Type", "application/zip")
+                                    connection.setRequestProperty("X-Mesh-Version", BuildConfig.VERSION_NAME)
+                                    connection.setFixedLengthStreamingMode(report.length().toInt())
+                                    connection.outputStream.use { output -> report.inputStream().use { it.copyTo(output) } }
+                                    val code = connection.responseCode
+                                    val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+                                    val payload = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                                    val json = JSONObject(payload)
+                                    if (code !in 200..299 || !json.optBoolean("ok", false)) {
+                                        throw IllegalStateException(when (json.optString("error")) {
+                                            "rate_limited" -> "Слишком много отчётов. Попробуй позже."
+                                            "service_not_configured", "upstream_unavailable" -> "Сервер временно недоступен."
+                                            "invalid_zip", "invalid_upload_size" -> "Архив не прошёл проверку."
+                                            else -> "Сервер не принял отчёт (код $code)."
+                                        })
+                                    }
+                                    if (json.optBoolean("duplicate", false)) "Такой баг уже зарегистрирован" else "Багрепорт отправлен"
+                                } finally {
+                                    connection.disconnect()
+                                }
                             }
-                            startActivity(Intent.createChooser(share, "Передать ZIP багрепорта"))
-                        }
-                        android.util.Log.i("MeshMessenger", "Bugreport ZIP created: ${report.name}")
+                            runOnUiThread {
+                                sendEnabled = true
+                                send.isEnabled = true
+                                upload.onSuccess { message ->
+                                    result.setTextColor(Color.rgb(0, 240, 180))
+                                    result.text = message
+                                    report.delete()
+                                }.onFailure { error ->
+                                    result.setTextColor(Color.rgb(255, 190, 90))
+                                    result.text = "Не удалось отправить. Архив сохранён в приложении; попробуй позже."
+                                    android.util.Log.w("MeshMessenger", "Bugreport upload failed", error)
+                                }
+                            }
+                        }.start()
                     }.onFailure { error ->
                         result.setTextColor(Color.rgb(255, 100, 100))
                         result.text = "Не удалось сформировать багрепорт: ${error.message ?: error.javaClass.simpleName}"
