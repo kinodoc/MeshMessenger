@@ -40,7 +40,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             return self.respond(200, {"ok": True, "service": "mesh-bugreport"})
-        match = re.fullmatch(r"/reports/([A-Za-z0-9_-]{20,40})\\.zip", self.path)
+        match = re.fullmatch(r"/reports/([A-Za-z0-9_-]{20,40})\.zip", self.path)
         if not match:
             return self.respond(404, {"ok": False, "error": "not_found"})
         target = REPORT_DIR / (match.group(1) + ".zip")
@@ -73,6 +73,8 @@ class Handler(BaseHTTPRequestHandler):
         while day and now - day[0] > 86400: day.popleft()
         if len(hour) >= MAX_PER_WINDOW or len(day) >= MAX_PER_DAY:
             return self.respond(429, {"ok": False, "error": "rate_limited"})
+        hour.append(now)
+        day.append(now)
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
