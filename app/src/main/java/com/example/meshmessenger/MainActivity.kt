@@ -33,7 +33,7 @@ import com.google.zxing.common.BitMatrix
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 
-class MainActivity : ComponentActivity() {
+class MainActivity : ComponentActivity() {\n    private var sendEnabled = true
     private var adapter: BluetoothAdapter? = null
     private lateinit var status: TextView
     private lateinit var log: TextView
@@ -382,7 +382,7 @@ class MainActivity : ComponentActivity() {
         root.addView(actionButton("МОЙ QR-КОД", R.drawable.ic_qr) { showOwnQr() })
         root.addView(actionButton("КОНТАКТЫ", R.drawable.ic_contacts) { contactsDialog() })
         root.addView(actionButton("ПРОВЕРИТЬ ОБНОВЛЕНИЕ", R.drawable.ic_update) { checkForUpdates(true) })
-        root.addView(actionButton("ОТПРАВИТЬ BUGREPORT", R.drawable.ic_bug) { shareBugReport() })
+        root.addView(actionButton("ОТПРАВИТЬ BUGREPORT", R.drawable.ic_bug) { showBugReportScreen() })
 
         updateStatus = homeText("", 14f).apply {
             setPadding(dp(2), dp(8), dp(2), dp(4))
@@ -402,25 +402,78 @@ class MainActivity : ComponentActivity() {
     }
 
 
-    private fun shareBugReport() {
-        runCatching {
-            val diagnostics = MeshDiagnostics(this)
-            val monitor = MeshBluetoothMonitor(this, adapter, diagnostics)
-            val report = MeshBugReport.create(this, diagnostics, monitor.snapshot())
-            val uri = FileProvider.getUriForFile(this, "${BuildConfig.APPLICATION_ID}.fileprovider", report)
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "application/zip"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_SUBJECT, "MeshMessenger bugreport ${BuildConfig.VERSION_NAME}")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            startActivity(Intent.createChooser(intent, "Отправить bugreport"))
-            log.text = "Bugreport подготовлен: ${report.name}"
-        }.onFailure {
-            android.util.Log.e("MeshMessenger", "Bugreport creation failed", it)
-            log.text = "Не удалось подготовить bugreport: ${it.message ?: it.javaClass.simpleName}"
+    private fun showBugReportScreen() {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(22), dp(20), dp(24))
+            setBackgroundColor(Color.rgb(2, 8, 19))
         }
+        root.addView(TextView(this).apply {
+            text = "ОТПРАВКА БАГРЕПОРТА"
+            textSize = 22f
+            typeface = Typeface.create("monospace", Typeface.BOLD)
+            setTextColor(Color.rgb(0, 240, 255))
+            setShadowLayer(dp(8).toFloat(), 0f, 0f, Color.rgb(0, 150, 255))
+            setPadding(0, 0, 0, dp(18))
+        })
+        root.addView(TextView(this).apply {
+            text = "Приложение соберёт версию, сведения об устройстве, состояние Bluetooth и журнал диагностики. Личные сообщения и ключи в отчёт добавлять не нужно."
+            textSize = 15f
+            setTextColor(Color.rgb(211, 229, 255))
+            setPadding(0, 0, 0, dp(18))
+        })
+        val result = TextView(this).apply {
+            text = ""
+            textSize = 15f
+            typeface = Typeface.create("monospace", Typeface.BOLD)
+            setTextColor(Color.rgb(211, 229, 255))
+            setPadding(0, dp(12), 0, dp(12))
+            contentDescription = "Результат отправки багрепорта"
+        }
+        val send = actionButton("СФОРМИРОВАТЬ И ОТПРАВИТЬ БАГРЕПОРТ", R.drawable.ic_bug) {
+            if (!sendEnabled) return@actionButton
+            sendEnabled = false
+            send.isEnabled = false
+            result.setTextColor(Color.rgb(211, 229, 255))
+            result.text = "Формируем отчёт…"
+            Thread {
+                val outcome = runCatching {
+                    val diagnostics = MeshDiagnostics(this)
+                    val monitor = MeshBluetoothMonitor(this, adapter, diagnostics)
+                    MeshBugReport.create(this, diagnostics, monitor.snapshot())
+                }
+                runOnUiThread {
+                    sendEnabled = true
+                    send.isEnabled = true
+                    outcome.onSuccess { report ->
+                        result.setTextColor(Color.rgb(255, 190, 90))
+                        result.text = "Не удалось отправить багрепорт автоматически: авторизация GitHub для приложения ещё не настроена. ZIP сформирован: ${report.name}"
+                        runCatching {
+                            val uri = FileProvider.getUriForFile(this, "${BuildConfig.APPLICATION_ID}.fileprovider", report)
+                            val share = Intent(Intent.ACTION_SEND).apply {
+                                type = "application/zip"
+                                putExtra(Intent.EXTRA_STREAM, uri)
+                                putExtra(Intent.EXTRA_SUBJECT, "MeshMessenger bugreport ${BuildConfig.VERSION_NAME}")
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                            startActivity(Intent.createChooser(share, "Передать ZIP багрепорта"))
+                        }
+                        android.util.Log.i("MeshMessenger", "Bugreport ZIP created: ${report.name}")
+                    }.onFailure { error ->
+                        result.setTextColor(Color.rgb(255, 100, 100))
+                        result.text = "Не удалось сформировать багрепорт: ${error.message ?: error.javaClass.simpleName}"
+                        android.util.Log.e("MeshMessenger", "Bugreport creation failed", error)
+                    }
+                }
+            }.start()
+        }
+        root.addView(send)
+        root.addView(result)
+        root.addView(actionButton("НАЗАД", R.drawable.ic_channel_off) { buildHome() })
+        setContentView(root)
     }
+
+    private fun itIsNotUsed() { }
 
     private fun checkForUpdates(manual: Boolean) {
         if (manual) updateStatus.text = "Проверяем обновления…"
