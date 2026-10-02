@@ -448,8 +448,6 @@ class MainActivity : ComponentActivity() {
                     MeshBugReport.create(this, diagnostics, monitor.snapshot())
                 }
                 runOnUiThread {
-                    sendEnabled = true
-                    send.isEnabled = true
                     outcome.onSuccess { report ->
                         result.text = "Отправляем отчёт на защищённый сервер…"
                         Thread {
@@ -484,6 +482,8 @@ class MainActivity : ComponentActivity() {
                             runOnUiThread {
                                 sendEnabled = true
                                 send.isEnabled = true
+                                sendEnabled = true
+                                send.isEnabled = true
                                 upload.onSuccess { message ->
                                     result.setTextColor(Color.rgb(0, 240, 180))
                                     result.text = message
@@ -496,6 +496,8 @@ class MainActivity : ComponentActivity() {
                             }
                         }.start()
                     }.onFailure { error ->
+                        sendEnabled = true
+                        send.isEnabled = true
                         result.setTextColor(Color.rgb(255, 100, 100))
                         result.text = "Не удалось сформировать багрепорт: ${error.message ?: error.javaClass.simpleName}"
                         android.util.Log.e("MeshMessenger", "Bugreport creation failed", error)
