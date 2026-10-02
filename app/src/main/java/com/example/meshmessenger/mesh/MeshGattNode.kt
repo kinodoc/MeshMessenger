@@ -388,7 +388,16 @@ class MeshGattNode(
                 if (characteristic.uuid != rx) return
                 val address = device.address
                 if (helloWriting.remove(address)) {
-                    if (status != BluetoothGatt.GATT_SUCCESS) onStatus("BLE: HELLO не отправлен")
+                    onDiagnostic(
+                        "BLE_HELLO_WRITE",
+                        "callback address=**${address.takeLast(5)} status=${status}"
+                    )
+                    if (status != BluetoothGatt.GATT_SUCCESS) {
+                        onDiagnostic("BLE_HELLO_WRITE", "failed status=${status}")
+                        onStatus("BLE: HELLO не отправлен (код ${status})")
+                    } else {
+                        onDiagnostic("BLE_HELLO_WRITE", "success")
+                    }
                     flushPeerQueue(address)
                     return
                 }
@@ -437,19 +446,31 @@ class MeshGattNode(
             HELLO_MAGIC, localId, localName.take(64), key
         ).joinToString("|").toByteArray(StandardCharsets.UTF_8)
         characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        helloWriting.add(gatt.device.address)
+        val address = gatt.device.address
+        helloWriting.add(address)
+        onDiagnostic("BLE_HELLO_WRITE", "start address=**${address.takeLast(5)} bytes=${characteristic.value.size}")
         val started = runCatching {
             if (Build.VERSION.SDK_INT >= 33) {
-                gatt.writeCharacteristic(
+                val result = gatt.writeCharacteristic(
                     characteristic,
                     characteristic.value.copyOf(),
                     BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                ) == BluetoothStatusCodes.SUCCESS
+                )
+                onDiagnostic("BLE_HELLO_WRITE", "api33_start_result=${result}")
+                result == BluetoothStatusCodes.SUCCESS
             } else {
-                gatt.writeCharacteristic(characteristic)
+                val result = gatt.writeCharacteristic(characteristic)
+                onDiagnostic("BLE_HELLO_WRITE", "legacy_start_result=${result}")
+                result
             }
+        }.onFailure {
+            onDiagnostic("BLE_HELLO_WRITE", "start_exception=${it.javaClass.simpleName}")
         }.getOrDefault(false)
-        if (!started) helloWriting.remove(gatt.device.address)
+        if (!started) {
+            helloWriting.remove(address)
+            onDiagnostic("BLE_HELLO_WRITE", "start_rejected address=**${address.takeLast(5)}")
+            onStatus("BLE: HELLO не запущен")
+        }
     }
 
     @SuppressLint("MissingPermission")
