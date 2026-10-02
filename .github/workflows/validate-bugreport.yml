@@ -43,5 +43,5 @@ jobs:
       - name: Compile debug APK
         run: |
           chmod +x ./gradlew
-          find "$HOME/.gradle/wrapper/dists" -type f -path "*/bin/gradle" -exec chmod +x {} +
+          find "$HOME/.gradle/wrapper/dists" -type f -path "*/bin/gradle" -exec chmod +x {} + 2>/dev/null || true
           ./gradlew --no-daemon :app:assembleDebug
