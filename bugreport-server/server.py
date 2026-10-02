@@ -83,7 +83,7 @@ class Handler(BaseHTTPRequestHandler):
                 "Архив содержит техническую диагностику устройства. Не публикуйте в нём "
                 "личные данные; доступ к ссылке следует ограничить сроком хранения."
             )
-            payload = json.dumps({"title": title, "body": issue_body, "labels": ["bug"]}).encode()
+            payload = json.dumps({"title": title, "body": issue_body}).encode()
             req = urllib.request.Request(
                 "https://api.github.com/repos/" + GITHUB_REPO + "/issues",
                 data=payload,
