@@ -430,7 +430,7 @@ class MainActivity : ComponentActivity() {\n    private var sendEnabled = true
             setPadding(0, dp(12), 0, dp(12))
             contentDescription = "Результат отправки багрепорта"
         }
-        val send = actionButton("СФОРМИРОВАТЬ И ОТПРАВИТЬ БАГРЕПОРТ", R.drawable.ic_bug) {
+        lateinit var send: Button\n        send = actionButton("СФОРМИРОВАТЬ И ОТПРАВИТЬ БАГРЕПОРТ", R.drawable.ic_bug) {
             if (!sendEnabled) return@actionButton
             sendEnabled = false
             send.isEnabled = false
