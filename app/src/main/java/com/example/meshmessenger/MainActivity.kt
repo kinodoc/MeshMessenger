@@ -33,7 +33,8 @@ import com.google.zxing.common.BitMatrix
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 
-class MainActivity : ComponentActivity() {\n    private var sendEnabled = true
+class MainActivity : ComponentActivity() {
+    private var sendEnabled = true
     private var adapter: BluetoothAdapter? = null
     private lateinit var status: TextView
     private lateinit var log: TextView
