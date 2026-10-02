@@ -52,8 +52,8 @@ def fingerprint_zip(data):
                 # Ignore volatile fields while retaining error/stack details.
                 text = re.sub(r"(?im)^.*(?:timestamp|time|date|device.?id|node.?id|mac|ip address)\s*[:=].*$", "", text)
                 text = re.sub(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}\b", "<UUID>", text)
-                text = re.sub(r"\b(?:\\d{1,3}\\.){3}\\d{1,3}\b", "<IP>", text)
-                text = re.sub(r"\b\\d{10,13}\b", "<TIME>", text)
+                text = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "<IP>", text)
+                text = re.sub(r"\b\d{10,13}\b", "<TIME>", text)
                 text = re.sub(r"\s+", " ", text).strip().lower()
                 if text:
                     parts.append(info.filename.lower() + ":" + text[:200_000])
