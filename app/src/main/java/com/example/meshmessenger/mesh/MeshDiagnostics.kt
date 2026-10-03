@@ -100,7 +100,7 @@ class MeshDiagnostics(context: Context) {
                     .take(80).ifBlank { "unknown" }
                 val operation = frame.methodName.filter { c -> c.isLetterOrDigit() || c in "_." }
                     .take(60).ifBlank { "unknown" }
-                event("CRASH_FRAME", "component=$component operation=$operation code=\${frame.lineNumber.coerceAtLeast(0)}")
+                event("CRASH_FRAME", "component=$component operation=$operation code=${frame.lineNumber.coerceAtLeast(0)}")
             }
     }
 
