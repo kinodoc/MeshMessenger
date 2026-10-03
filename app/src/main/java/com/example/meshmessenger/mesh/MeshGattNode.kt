@@ -7,6 +7,8 @@ import android.bluetooth.le.*
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelUuid
 import android.util.Log
 import java.nio.ByteBuffer
@@ -36,6 +38,9 @@ class MeshGattNode(
     @Volatile private var gattServerReady = false
     @Volatile private var advertisingStarted = false
     @Volatile private var scanningStarted = false
+    @Volatile private var running = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var scanRetryCount = 0
     private var advertiser: BluetoothLeAdvertiser? = null
     private var advertiseCallback: AdvertiseCallback? = null
     private var scanner: BluetoothLeScanner? = null
@@ -90,6 +95,7 @@ class MeshGattNode(
 
     @SuppressLint("MissingPermission")
     fun start() {
+        running = true
         if (Build.VERSION.SDK_INT >= 31 && context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
         server = manager.openGattServer(context, object : BluetoothGattServerCallback() {
             override fun onServiceAdded(status: Int, service: BluetoothGattService) {
@@ -248,11 +254,47 @@ class MeshGattNode(
                 scanningStarted = false
                 onDiagnostic("BLE_SCAN", "failed code=" + errorCode)
                 onStatus("BLE scan error: " + errorCode)
+                scheduleScanRestart("callback-$errorCode")
             }
         }
         runCatching { bleScanner.startScan(null, scanSettings, scanCallback) }
-            .onSuccess { scanningStarted = true; onDiagnostic("BLE_SCAN", "started mode=BALANCED") }
-            .onFailure { onDiagnostic("BLE_SCAN", "start_exception=" + it.javaClass.simpleName) }
+            .onSuccess { scanningStarted = true; scanRetryCount = 0; onDiagnostic("BLE_SCAN", "started mode=BALANCED") }
+            .onFailure {
+                scanningStarted = false
+                onDiagnostic("BLE_SCAN", "start_exception=" + it.javaClass.simpleName)
+                scheduleScanRestart("start-exception")
+            }
+    }
+
+    /** Recover BLE discovery after transient Android/OEM scanner failures. */
+    @SuppressLint("MissingPermission")
+    private fun scheduleScanRestart(reason: String) {
+        if (!running) return
+        val attempt = (++scanRetryCount).coerceAtMost(6)
+        val delayMs = (2_000L * attempt).coerceAtMost(15_000L)
+        onDiagnostic("BLE_SCAN", "retry_scheduled attempt=$attempt delay_ms=$delayMs reason=$reason")
+        mainHandler.removeCallbacksAndMessages("ble-scan-retry")
+        mainHandler.postAtTime({
+            if (!running || scanningStarted) return@postAtTime
+            val currentScanner = runCatching { adapter.bluetoothLeScanner }.getOrNull()
+            val callback = scanCallback
+            if (currentScanner == null || callback == null || !adapter.isEnabled) {
+                scheduleScanRestart("scanner-unavailable")
+                return@postAtTime
+            }
+            scanner = currentScanner
+            runCatching {
+                currentScanner.startScan(null, ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_BALANCED).build(), callback)
+            }.onSuccess {
+                scanningStarted = true
+                scanRetryCount = 0
+                onDiagnostic("BLE_SCAN", "restarted")
+            }.onFailure {
+                scanningStarted = false
+                onDiagnostic("BLE_SCAN", "restart_exception=" + it.javaClass.simpleName)
+                scheduleScanRestart("restart-exception")
+            }
+        }, "ble-scan-retry", android.os.SystemClock.uptimeMillis() + delayMs)
     }
 
     @SuppressLint("MissingPermission")
@@ -271,8 +313,11 @@ class MeshGattNode(
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     peers[device.address] = g
                     onPeerCountChanged(peerCount())
-                    g.requestMtu(247)
-                    g.discoverServices()
+                    val mtuRequested = runCatching { g.requestMtu(247) }.getOrDefault(false)
+                    if (!mtuRequested) {
+                        onDiagnostic("BLE_GATT_MTU", "request_failed; discover_services_without_mtu")
+                        g.discoverServices()
+                    }
                 } else {
                     peers.remove(device.address)
                     connecting.remove(device.address)
@@ -290,7 +335,14 @@ class MeshGattNode(
                     g.close()
                 }
             }
-            override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) { g.discoverServices() }
+            override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+                onDiagnostic("BLE_GATT_MTU", "mtu=$mtu status=$status")
+                // Continue with the negotiated (or default) MTU; discover only once.
+                runCatching { g.discoverServices() }.onFailure {
+                    onDiagnostic("BLE_GATT_DISCOVERY", "start_exception=" + it.javaClass.simpleName)
+                    g.disconnect()
+                }
+            }
             override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     onStatus("BLE: ошибка обнаружения сервисов $status")
@@ -362,7 +414,7 @@ class MeshGattNode(
                 flushPeerQueue(address)
             }
         }
-        val gatt = runCatching { device.connectGatt(context, false, callback) }.getOrNull()
+        val gatt = runCatching { device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE) }.getOrNull()
         if (gatt == null) {
             connecting.remove(device.address)
             if (stableId.isNotBlank()) connectingNodeIds.remove(stableId)
@@ -692,6 +744,8 @@ class MeshGattNode(
     }.getOrDefault(false)
 
     fun stop() {
+        running = false
+        mainHandler.removeCallbacksAndMessages("ble-scan-retry")
         gattServerReady = false
         advertisingStarted = false
         scanningStarted = false
