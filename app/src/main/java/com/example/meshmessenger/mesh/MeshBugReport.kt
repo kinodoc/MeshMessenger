@@ -10,12 +10,15 @@ import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
-/** Creates a diagnostic archive. Automatic reports use a minimized, redacted payload. */
+/**
+ * Creates the same privacy-filtered diagnostic archive for manual and automatic reports.
+ * The only optional entry is a locally recorded crash trace when one is available.
+ */
 object MeshBugReport {
     fun create(
         context: Context,
         diagnostics: MeshDiagnostics,
-        bluetoothSnapshot: String,
+        bluetoothSnapshot: String = "",
         crashTrace: String? = null,
         automatic: Boolean = false
     ): File {
@@ -24,26 +27,23 @@ object MeshBugReport {
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
         val file = File(dir, "MeshMessenger-bugreport-${stamp}.zip")
 
+        // Keep diagnostic metadata consistent across manual and automatic submissions.
+        // Exclude manufacturer/model, serials, Android ID, MAC/IP addresses, names and secrets.
         val meta = buildString {
             appendLine("MeshMessenger bugreport")
             appendLine("version=${com.example.meshmessenger.BuildConfig.VERSION_NAME}")
             appendLine("versionCode=${com.example.meshmessenger.BuildConfig.VERSION_CODE}")
             appendLine("android=${Build.VERSION.RELEASE}")
             appendLine("api=${Build.VERSION.SDK_INT}")
-            // Hardware model helps reproduce vendor-specific BLE and background-service failures.
-            // Do not include serial numbers, Android ID, MAC addresses, or other device identifiers.
-            appendLine("deviceManufacturer=${Build.MANUFACTURER.take(80)}")
-            appendLine("deviceModel=${Build.MODEL.take(100)}")
             appendLine("supportedAbis=${Build.SUPPORTED_ABIS.take(4).joinToString(",").take(160)}")
         }
 
         ZipOutputStream(file.outputStream().buffered()).use { zip ->
             put(zip, "report.txt", meta)
-            // Manual and automatic reports share the same privacy-filtered diagnostics.
-            // Raw Bluetooth snapshots can contain identifiers and are intentionally excluded.
             put(zip, "mesh_diagnostics.log", diagnostics.readForUpload())
+            // A crash trace is included only if present. The app stores exception class and
+            // stack frames, never exception messages, chat content, contacts, or keys.
             if (!crashTrace.isNullOrBlank()) {
-                // Automatic traces are already stored without exception messages.
                 put(zip, "crash_trace.txt", crashTrace.take(48_000))
             }
         }
