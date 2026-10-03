@@ -28,7 +28,8 @@ class MeshRelayTransport(
     private val onMessage: (String, String, MeshPacket, String) -> Unit,
     private val onDeliveryAck: (String) -> Unit = {},
     private val onPeer: (nodeId: String, name: String, publicKey: ByteArray, ip: String) -> Unit = { _, _, _, _ -> },
-    private val onPeerCount: (Int) -> Unit = {}
+    private val onPeerCount: (Int) -> Unit = {},
+    private val onDiagnostic: (String, String) -> Unit = { _, _ -> }
 ) {
     companion object {
         private const val HOST = "194.87.186.159"
@@ -65,11 +66,13 @@ class MeshRelayTransport(
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
+        onDiagnostic("RELAY_START", "state=starting")
         executor.execute { connectionLoop() }
     }
 
     fun stop() {
         running.set(false)
+        onDiagnostic("RELAY_STOP", "state=stopping")
         runCatching { socket?.close() }
         socket = null
         writer = null
@@ -81,7 +84,11 @@ class MeshRelayTransport(
     }
 
     fun send(packet: MeshPacket, ignoredAddress: String = ""): Boolean {
-        if (!running.get()) return false
+        if (!running.get()) {
+            onDiagnostic("RELAY_SEND_SKIPPED", "reason=not_running")
+            return false
+        }
+        onDiagnostic("RELAY_SEND", "packet_bytes=${packet.encode().size}")
         return sendJson(JSONObject()
             .put("type", "packet")
             .put("to", packet.destinationId)
@@ -110,10 +117,12 @@ class MeshRelayTransport(
         var delay = 1500L
         while (running.get()) {
             try {
+                onDiagnostic("RELAY_CONNECT", "state=attempt")
                 val s = sslContext.socketFactory.createSocket() as SSLSocket
                 s.connect(InetSocketAddress(HOST, PORT), 8000)
                 s.soTimeout = 0
                 s.startHandshake()
+                onDiagnostic("RELAY_CONNECT", "state=connected tls=ok")
                 socket = s
                 writer = BufferedWriter(OutputStreamWriter(s.outputStream, Charsets.UTF_8))
                 reader = BufferedReader(InputStreamReader(s.inputStream, Charsets.UTF_8))
@@ -130,10 +139,12 @@ class MeshRelayTransport(
                 }
             } catch (e: Exception) {
                 if (running.get()) {
-                    Log.w(TAG, "connection lost: ${e.javaClass.simpleName}: ${e.message}")
+                    Log.w(TAG, "connection lost: ${e.javaClass.simpleName}")
+                    onDiagnostic("RELAY_ERROR", "stage=connection type=${e.javaClass.simpleName}")
                     onStatus("Relay: ожидание соединения")
                 }
             } finally {
+                onDiagnostic("RELAY_CONNECT", "state=disconnected")
                 runCatching { socket?.close() }
                 socket = null
                 writer = null
@@ -152,6 +163,7 @@ class MeshRelayTransport(
         when (msg.optString("type")) {
             "hello_required" -> Unit
             "welcome" -> {
+                onDiagnostic("RELAY_WELCOME", "state=received")
                 val list = msg.optJSONArray("peers")
                 if (list != null) for (i in 0 until list.length()) {
                     val p = list.optJSONObject(i) ?: continue
@@ -161,10 +173,12 @@ class MeshRelayTransport(
             }
             "peer_online" -> rememberPeer(msg.optString("nodeId"), msg.optString("name"), msg.optString("publicKey"))
             "peer_offline" -> {
+                onDiagnostic("RELAY_PEER", "state=offline")
                 peers.remove(msg.optString("nodeId"))
                 onPeerCount(peers.size)
             }
             "packet" -> {
+                onDiagnostic("RELAY_PACKET", "stage=received")
                 val bytes = runCatching { Base64.decode(msg.getString("payload"), Base64.DEFAULT) }.getOrNull() ?: return
                 val packet = MeshPacket.decode(bytes) ?: return
                 val next = router.onReceive(packet)
@@ -186,16 +200,22 @@ class MeshRelayTransport(
                     send(next)
                 }
             }
-            "accepted" -> Log.d(TAG, "relay accepted id=${msg.optString("messageId")} online=${msg.optBoolean("online")}")
-            "error" -> Log.w(TAG, "relay error: ${msg.optString("message")}")
+            "accepted" -> onDiagnostic("RELAY_PACKET", "stage=accepted online=${msg.optBoolean("online")}")
+            "error" -> onDiagnostic("RELAY_SERVER_ERROR", "code=${msg.optString("code", "unspecified").take(40)}")
             "pong" -> Unit
         }
     }
 
     private fun rememberPeer(id: String, name: String, keyText: String) {
-        if (id.isBlank() || id == localId) return
+        if (id.isBlank() || id == localId) {
+            onDiagnostic("RELAY_PEER_REJECTED", "reason=invalid_or_self")
+            return
+        }
         val key = runCatching { Base64.decode(keyText, Base64.DEFAULT) }.getOrNull() ?: return
-        if (key.isEmpty()) return
+        if (key.isEmpty()) {
+            onDiagnostic("RELAY_PEER_REJECTED", "reason=empty_public_key")
+            return
+        }
         val safeName = name.ifBlank { id.take(8) }
         peers[id] = PeerInfo(safeName, key)
         onPeer(id, safeName, key, "")
