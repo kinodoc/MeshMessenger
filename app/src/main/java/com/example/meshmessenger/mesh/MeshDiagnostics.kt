@@ -41,13 +41,16 @@ class MeshDiagnostics(context: Context) {
             }
         }
     }
+
+    /** Export only event categories and platform/app versions; discard arbitrary details. */
+    fun readForUpload(): String = read().lineSequence().mapNotNull { line ->
+        val fields = line.split('|', limit = 5)
+        if (fields.size >= 4) fields.take(4).joinToString("|") else null
+    }.joinToString("\n")
+
     fun crash(thread: Thread, throwable: Throwable) {
-        event(
-            "CRASH",
-            "thread=" + thread.name + "|error=" +
-                throwable.javaClass.simpleName + ":" + throwable.message.orEmpty()
-        )
-        event("CRASH_CAUSE", throwable.stackTraceToString().take(3000))
+        event("CRASH", "thread=" + thread.name + "|error=" + throwable.javaClass.simpleName)
+        event("CRASH_CAUSE", throwable.stackTrace.take(40).joinToString(" <- ") { it.toString() })
     }
 
     fun read(): String {
