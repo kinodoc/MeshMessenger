@@ -52,7 +52,7 @@ class MeshDiagnostics(context: Context) {
     }.joinToString("\n")
 
     fun crash(thread: Thread, throwable: Throwable) {
-        event("CRASH", "thread=\${thread.name} error=\${throwable.javaClass.simpleName}")
+        event("CRASH", "thread=" + thread.name + " error=" + throwable.javaClass.simpleName)
         event("CRASH_STACK", throwable.stackTrace.take(40).joinToString(" <- ") { it.toString() })
     }
 
