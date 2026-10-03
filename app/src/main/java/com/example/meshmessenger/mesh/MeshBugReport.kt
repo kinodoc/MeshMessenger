@@ -10,7 +10,10 @@ import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
-/** Creates a diagnostic archive. Automatic reports use a minimized, redacted payload. */
+/**
+ * Creates the same privacy-preserving diagnostic archive for manual and automatic reports.
+ * Report delivery differs; diagnostic contents do not.
+ */
 object MeshBugReport {
     fun create(
         context: Context,
@@ -24,28 +27,23 @@ object MeshBugReport {
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
         val file = File(dir, "MeshMessenger-bugreport-${stamp}.zip")
 
+        // Keep metadata useful for debugging but avoid hardware identifiers and wall-clock
+        // creation time. Event timestamps in the diagnostic log provide the timeline.
         val meta = buildString {
             appendLine("MeshMessenger bugreport")
             appendLine("version=${com.example.meshmessenger.BuildConfig.VERSION_NAME}")
             appendLine("versionCode=${com.example.meshmessenger.BuildConfig.VERSION_CODE}")
             appendLine("android=${Build.VERSION.RELEASE}")
             appendLine("api=${Build.VERSION.SDK_INT}")
-            if (!automatic) {
-                appendLine("manufacturer=${Build.MANUFACTURER}")
-                appendLine("model=${Build.MODEL}")
-                appendLine("created=${Date()}")
-            }
         }
 
         ZipOutputStream(file.outputStream().buffered()).use { zip ->
             put(zip, "report.txt", meta)
-            if (!automatic && bluetoothSnapshot.isNotBlank()) {
-                put(zip, "bluetooth.txt", bluetoothSnapshot)
-            }
-            put(zip, "mesh_diagnostics.log",
-                if (automatic) diagnostics.readForUpload() else diagnostics.read())
+            // Bluetooth snapshots may contain device names/addresses. Use structured,
+            // allowlisted BLE events from diagnostics instead of raw snapshots.
+            put(zip, "mesh_diagnostics.log", diagnostics.readForUpload())
             if (!crashTrace.isNullOrBlank()) {
-                // Automatic traces are already stored without exception messages.
+                // Callers must pass a sanitized trace: exception type and stack frames only.
                 put(zip, "crash_trace.txt", crashTrace.take(48_000))
             }
         }
