@@ -19,7 +19,7 @@ class MeshMessengerApp : Application() {
         super.onCreate()
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
-            recordCriticalFailure("uncaught thread=${thread.name}", error)
+            recordCriticalFailure("uncaught", error)
             previous?.uncaughtException(thread, error)
         }
         if (crashFile.isFile && crashFile.length() in 1..48_000) {
@@ -31,7 +31,7 @@ class MeshMessengerApp : Application() {
     fun recordCriticalFailure(label: String, error: Throwable) {
         runCatching {
             crashFile.writeText(buildString {
-                appendLine("event=${label.take(120)}")
+                appendLine("event=${label.replace(Regex(\"[^A-Za-z0-9_-]\"), \"_\").take(80)}")
                 appendLine("exception=${error.javaClass.name}")
                 error.stackTrace.take(80).forEach { appendLine(" at $it") }
                 error.cause?.let { cause ->
