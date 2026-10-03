@@ -9,8 +9,8 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Local-only technical diagnostics.
- * Never stores chat text, keys or contact names.
+ * Local technical diagnostics. Arbitrary event details are never exported because
+ * call sites can accidentally include identifiers, addresses, names or message data.
  */
 class MeshDiagnostics(context: Context) {
     companion object {
@@ -24,14 +24,13 @@ class MeshDiagnostics(context: Context) {
     private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
 
     fun event(type: String, detail: String = "") {
-        val safeType = type.replace(Regex("[\\r\\n|]"), " ").take(80)
-        val safeDetail = detail.replace(Regex("[\\r\\n|]"), " ").take(500)
+        val safeType = type.replace(Regex("[^A-Za-z0-9_.-]"), "_").take(80)
+        // Persist event category only; details are intentionally discarded.
         val line = buildString {
             append(formatter.format(Date()))
             append("|v=").append(BuildConfig.VERSION_NAME)
             append("|api=").append(Build.VERSION.SDK_INT)
             append("|").append(safeType)
-            if (safeDetail.isNotBlank()) append("|").append(safeDetail)
         }
         synchronized(lock) {
             runCatching {
@@ -42,15 +41,16 @@ class MeshDiagnostics(context: Context) {
         }
     }
 
-    /** Export only event categories and platform/app versions; discard arbitrary details. */
+    /** Identical privacy-filtered event stream for manual and automatic reports. */
     fun readForUpload(): String = read().lineSequence().mapNotNull { line ->
         val fields = line.split('|', limit = 5)
         if (fields.size >= 4) fields.take(4).joinToString("|") else null
     }.joinToString("\n")
 
     fun crash(thread: Thread, throwable: Throwable) {
-        event("CRASH", "thread=" + thread.name + "|error=" + throwable.javaClass.simpleName)
-        event("CRASH_CAUSE", throwable.stackTrace.take(40).joinToString(" <- ") { it.toString() })
+        // Do not persist thread names or exception messages; stack frames are stored separately.
+        event("CRASH")
+        event("CRASH_FRAMES")
     }
 
     fun read(): String {
