@@ -9,14 +9,23 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Local-only technical diagnostics.
- * Never stores chat text, keys or contact names.
+ * Local technical diagnostics. Event details must be machine-generated enums, counts,
+ * durations, or error codes. Never pass message text, contact data, keys, tokens or raw packets.
  */
 class MeshDiagnostics(context: Context) {
     companion object {
         private const val FILE_NAME = "mesh_diagnostics.log"
-        private const val MAX_LINES = 800
-        private const val MAX_FILE_BYTES = 128 * 1024L
+        private const val MAX_LINES = 1200
+        private const val MAX_FILE_BYTES = 192 * 1024L
+
+        // Only these fields are eligible for upload; unknown fields are discarded.
+        private val SAFE_DETAIL_KEYS = setOf(
+            "stage", "state", "result", "reason", "error", "code", "status",
+            "transport", "operation", "attempt", "retry", "count", "queue",
+            "duration_ms", "elapsed_ms", "api", "version", "connected",
+            "enabled", "permission", "mtu", "bytes", "service", "exception"
+        )
+        private val SAFE_VALUE = Regex("^[A-Za-z0-9_.:/-]{1,80}$")
     }
 
     private val file = File(context.filesDir, FILE_NAME)
@@ -24,8 +33,8 @@ class MeshDiagnostics(context: Context) {
     private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
 
     fun event(type: String, detail: String = "") {
-        val safeType = type.replace(Regex("[\\r\\n|]"), " ").take(80)
-        val safeDetail = detail.replace(Regex("[\\r\\n|]"), " ").take(500)
+        val safeType = type.filter { it.isLetterOrDigit() || it in "._-" }.take(80).ifBlank { "EVENT" }
+        val safeDetail = sanitizeDetails(detail)
         val line = buildString {
             append(formatter.format(Date()))
             append("|v=").append(BuildConfig.VERSION_NAME)
@@ -42,27 +51,51 @@ class MeshDiagnostics(context: Context) {
         }
     }
 
-    /** Export only event categories and platform/app versions; discard arbitrary details. */
+    /** Shared payload for manual and automatic reports: safe fields, same event history. */
     fun readForUpload(): String = read().lineSequence().mapNotNull { line ->
         val fields = line.split('|', limit = 5)
-        if (fields.size >= 4) fields.take(4).joinToString("|") else null
-    }.joinToString("\n")
+        if (fields.size < 4) return@mapNotNull null
+        val timestamp = fields[0].takeIf { it.matches(Regex("^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3}$")) }
+            ?: return@mapNotNull null
+        val version = fields[1].takeIf { it.matches(Regex("^v=[A-Za-z0-9._+-]{1,40}$")) } ?: return@mapNotNull null
+        val api = fields[2].takeIf { it.matches(Regex("^api=\\d{1,3}$")) } ?: return@mapNotNull null
+        val type = fields[3].filter { it.isLetterOrDigit() || it in "._-" }.take(80).ifBlank { "EVENT" }
+        val details = if (fields.size == 5) sanitizeDetails(fields[4]) else ""
+        listOf(timestamp, version, api, type, details).filterIndexed { index, value -> index < 4 || value.isNotBlank() }.joinToString("|")
+    }.takeLast(MAX_LINES).joinToString("\n")
 
-    fun crash(thread: Thread, throwable: Throwable) {
-        event("CRASH", "thread=" + thread.name + "|error=" + throwable.javaClass.simpleName)
-        event("CRASH_CAUSE", throwable.stackTrace.take(40).joinToString(" <- ") { it.toString() })
+    private fun sanitizeDetails(raw: String): String {
+        return raw.split('|', ',', ';', ' ')
+            .mapNotNull { token ->
+                val split = token.split('=', limit = 2)
+                if (split.size != 2) return@mapNotNull null
+                val key = split[0].lowercase(Locale.US)
+                val value = split[1]
+                if (key !in SAFE_DETAIL_KEYS || !SAFE_VALUE.matches(value)) return@mapNotNull null
+                "$key=$value"
+            }
+            .distinct()
+            .take(20)
+            .joinToString(",")
+            .take(600)
     }
 
-    fun read(): String {
-        synchronized(lock) {
-            return runCatching { file.readText(Charsets.UTF_8) }.getOrDefault("")
-        }
+    fun crash(thread: Thread, throwable: Throwable) {
+        // Thread names and exception messages can contain arbitrary application/user data.
+        event("CRASH", "exception=" + throwable.javaClass.simpleName.filter { it.isLetterOrDigit() || it == '_' }.take(80))
+        event("CRASH_STACK", throwable.stackTrace.take(40).joinToString(",") {
+            (it.className.filter { c -> c.isLetterOrDigit() || c in "._$" }.take(120) + ":" +
+                it.methodName.filter { c -> c.isLetterOrDigit() || c in "_$" }.take(80) + ":" + it.lineNumber)
+        })
+    }
+
+    fun read(): String = synchronized(lock) {
+        runCatching { file.readText(Charsets.UTF_8) }.getOrDefault("")
     }
 
     private fun trimIfNeeded() {
         if (!file.exists() || file.length() <= MAX_FILE_BYTES) return
-        val lines = file.readLines(Charsets.UTF_8)
-        val kept = lines.takeLast(MAX_LINES)
+        val kept = file.readLines(Charsets.UTF_8).takeLast(MAX_LINES)
         file.writeText(kept.joinToString("\n") + "\n", Charsets.UTF_8)
     }
 }
