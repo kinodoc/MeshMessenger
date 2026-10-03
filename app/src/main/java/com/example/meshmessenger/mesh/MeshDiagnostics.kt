@@ -19,12 +19,14 @@ class MeshDiagnostics(context: Context) {
         private const val MAX_LINES = 800
         private const val MAX_FILE_BYTES = 128 * 1024L
 
-        // Only structured, low-risk fields leave the device. Never export peer or route IDs.
+        // Structured, low-risk diagnostic fields. Identifiers and free-form text are never exported.
         private val uploadKeys = setOf(
-            "state", "transport", "result", "reason", "error", "errorCode",
-            "attempt", "retries", "queueSize", "durationMs", "packetType",
-            "peerCount", "connected", "enabled", "httpStatus", "bytes",
-            "stage", "operation", "serviceState", "component", "method", "line"
+            "state", "transport", "result", "reason", "error", "errorCode", "error_type",
+            "attempt", "retries", "queueSize", "durationMs", "packetType", "peerCount",
+            "connected", "enabled", "httpStatus", "bytes", "stage", "operation",
+            "serviceState", "component", "method", "line", "ble_ready", "relay_ready",
+            "nodeReady", "nodeHealthy", "relayReady", "messageType", "status", "count",
+            "timeoutMs", "mtu", "gattStatus", "profile", "permission", "available"
         )
         private val safeValue = Regex("[A-Za-z][A-Za-z0-9_.$:/+-]{0,79}|[0-9]{1,8}")
         private val privateIdentifier = Regex(
@@ -56,7 +58,7 @@ class MeshDiagnostics(context: Context) {
         }
     }
 
-    /** Preserve event order and approved values; discard arbitrary/private values. */
+    /** Preserve event order and approved diagnostic values; discard arbitrary/private values. */
     fun readForUpload(): String = read().lineSequence().mapNotNull { line ->
         val fields = line.split('|', limit = 5)
         if (fields.size < 4) return@mapNotNull null
@@ -77,7 +79,7 @@ class MeshDiagnostics(context: Context) {
                 val value = split[1]
                 if (!safeValue.matches(value) || privateIdentifier.containsMatchIn(value)) return@mapNotNull null
                 "${split[0]}=$value"
-            }.take(20)
+            }.take(30)
         } else emptyList()
         (listOf(timestamp, "v=$version", "api=$api", type) + approvedDetails).joinToString("|")
     }.joinToString("\n")
