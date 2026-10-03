@@ -23,17 +23,17 @@ object MeshBugReport {
         val dir = context.getExternalFilesDir("Download") ?: context.cacheDir
         dir.mkdirs()
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-        val file = File(dir, "MeshMessenger-bugreport-\${stamp}.zip")
+        val file = File(dir, "MeshMessenger-bugreport-" + stamp + ".zip")
 
         val meta = buildString {
             appendLine("MeshMessenger bugreport")
-            appendLine("version=\${BuildConfig.VERSION_NAME}")
-            appendLine("versionCode=\${BuildConfig.VERSION_CODE}")
-            appendLine("android=\${Build.VERSION.RELEASE}")
-            appendLine("api=\${Build.VERSION.SDK_INT}")
-            appendLine("deviceManufacturer=\${Build.MANUFACTURER}")
-            appendLine("deviceModel=\${Build.MODEL}")
-            appendLine("abi=\${Build.SUPPORTED_ABIS.firstOrNull().orEmpty()}")
+            appendLine("version=" + BuildConfig.VERSION_NAME)
+            appendLine("versionCode=" + BuildConfig.VERSION_CODE)
+            appendLine("android=" + Build.VERSION.RELEASE)
+            appendLine("api=" + Build.VERSION.SDK_INT)
+            appendLine("deviceManufacturer=" + Build.MANUFACTURER)
+            appendLine("deviceModel=" + Build.MODEL)
+            appendLine("abi=" + Build.SUPPORTED_ABIS.firstOrNull().orEmpty())
         }
 
         ZipOutputStream(file.outputStream().buffered()).use { zip ->
