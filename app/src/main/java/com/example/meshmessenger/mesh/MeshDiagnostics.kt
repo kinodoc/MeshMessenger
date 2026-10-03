@@ -9,16 +9,15 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Local technical diagnostics. Event details must be machine-generated enums, counts,
- * durations, or error codes. Never pass message text, contact data, keys, tokens or raw packets.
+ * Local technical diagnostics. Event details must be machine-generated enums,
+ * durations, counts, or error codes. Never pass message text, contact data, keys,
+ * tokens, peer identifiers, or raw packets.
  */
 class MeshDiagnostics(context: Context) {
     companion object {
         private const val FILE_NAME = "mesh_diagnostics.log"
         private const val MAX_LINES = 1200
         private const val MAX_FILE_BYTES = 192 * 1024L
-
-        // Strict allowlist: diagnostics may describe behavior, never payloads or identities.
         private val SAFE_DETAIL_KEYS = setOf(
             "stage", "state", "result", "reason", "error", "code", "status",
             "transport", "operation", "attempt", "retry", "count", "queue",
@@ -57,7 +56,7 @@ class MeshDiagnostics(context: Context) {
         }
     }
 
-    /** Shared payload for manual and automatic reports: same redacted event history. */
+    /** Shared, redacted event history used by both manual and automatic reports. */
     fun readForUpload(): String = read().lineSequence().mapNotNull { line ->
         val fields = line.split('|', limit = 5)
         if (fields.size < 4) return@mapNotNull null
@@ -93,10 +92,16 @@ class MeshDiagnostics(context: Context) {
     fun crash(thread: Thread, throwable: Throwable) {
         // Thread names and exception messages can contain arbitrary application/user data.
         event("CRASH", "exception=" + throwable.javaClass.simpleName.filter { it.isLetterOrDigit() || it == '_' }.take(80))
-        event("CRASH_STACK", throwable.stackTrace.take(40).joinToString(",") {
-            it.className.filter { c -> c.isLetterOrDigit() || c in "._$" }.take(120) + ":" +
-                it.methodName.filter { c -> c.isLetterOrDigit() || c in "_$" }.take(80) + ":" + it.lineNumber
-        })
+        // Store stack frames as allowlisted structured events; omit file paths and messages.
+        (throwable.stackTrace.asSequence().take(40) +
+            (throwable.cause?.stackTrace?.asSequence()?.take(20) ?: emptySequence()))
+            .forEach { frame ->
+                val component = frame.className.filter { c -> c.isLetterOrDigit() || c in "._" }
+                    .take(80).ifBlank { "unknown" }
+                val operation = frame.methodName.filter { c -> c.isLetterOrDigit() || c in "_." }
+                    .take(60).ifBlank { "unknown" }
+                event("CRASH_FRAME", "component=$component operation=$operation code=\${frame.lineNumber.coerceAtLeast(0)}")
+            }
     }
 
     fun read(): String = synchronized(lock) {
