@@ -49,13 +49,22 @@ class MeshDiagnostics(context: Context) {
         event("CRASH_STACK", throwable.stackTrace.take(80).joinToString(" <- ") { it.className + "." + it.methodName + ":" + it.lineNumber })
     }
 
-    /** The same privacy-filtered event stream is used for manual and automatic reports. */
+    /**
+     * The same bounded, privacy-filtered event stream is used by manual and automatic reports.
+     * Preserve diagnostic details (error codes, counters, state transitions), but sanitize
+     * identifiers and sensitive key/value fields before anything leaves the device.
+     */
     fun readForUpload(): String = synchronized(lock) {
         runCatching {
             file.readLines(Charsets.UTF_8).takeLast(MAX_LINES).joinToString("\n") { line ->
                 val fields = line.split('|', limit = 5)
-                if (fields.size < 4) sanitize(line)
-                else fields.take(4).joinToString("|") + if (fields.size == 5) "|" + sanitize(fields[4]) else ""
+                if (fields.size < 4) {
+                    sanitize(line)
+                } else {
+                    val header = fields.take(4).joinToString("|")
+                    val detail = fields.getOrNull(4)?.let { sanitize(it) }.orEmpty()
+                    if (detail.isBlank()) header else "$header|$detail"
+                }
             }
         }.getOrDefault("")
     }
