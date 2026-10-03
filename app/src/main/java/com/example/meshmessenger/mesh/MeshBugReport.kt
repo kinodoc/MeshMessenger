@@ -10,13 +10,14 @@ import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
-/** Creates a shareable, local-only diagnostic archive for bug reports. */
+/** Creates a diagnostic archive. Automatic reports use a minimized, redacted payload. */
 object MeshBugReport {
     fun create(
         context: Context,
         diagnostics: MeshDiagnostics,
         bluetoothSnapshot: String,
-        crashTrace: String? = null
+        crashTrace: String? = null,
+        automatic: Boolean = false
     ): File {
         val dir = context.getExternalFilesDir("Download") ?: context.cacheDir
         dir.mkdirs()
@@ -29,16 +30,24 @@ object MeshBugReport {
             appendLine("versionCode=${com.example.meshmessenger.BuildConfig.VERSION_CODE}")
             appendLine("android=${Build.VERSION.RELEASE}")
             appendLine("api=${Build.VERSION.SDK_INT}")
-            appendLine("manufacturer=${Build.MANUFACTURER}")
-            appendLine("model=${Build.MODEL}")
-            appendLine("created=${Date()}")
+            if (!automatic) {
+                appendLine("manufacturer=${Build.MANUFACTURER}")
+                appendLine("model=${Build.MODEL}")
+                appendLine("created=${Date()}")
+            }
         }
 
         ZipOutputStream(file.outputStream().buffered()).use { zip ->
             put(zip, "report.txt", meta)
-            put(zip, "bluetooth.txt", bluetoothSnapshot)
-            put(zip, "mesh_diagnostics.log", diagnostics.read())
-            if (!crashTrace.isNullOrBlank()) put(zip, "crash_trace.txt", crashTrace.take(48_000))
+            if (!automatic && bluetoothSnapshot.isNotBlank()) {
+                put(zip, "bluetooth.txt", bluetoothSnapshot)
+            }
+            put(zip, "mesh_diagnostics.log",
+                if (automatic) diagnostics.readForUpload() else diagnostics.read())
+            if (!crashTrace.isNullOrBlank()) {
+                // Automatic traces are already stored without exception messages.
+                put(zip, "crash_trace.txt", crashTrace.take(48_000))
+            }
         }
         return file
     }

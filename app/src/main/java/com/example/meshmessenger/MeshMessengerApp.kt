@@ -10,7 +10,8 @@ import java.net.URL
 
 /**
  * Crash reports are persisted locally by the uncaught handler and uploaded on the next
- * app launch. Uploads contain diagnostics only; chat stores and identity keys are not read.
+ * app launch. Automatic reports exclude Bluetooth snapshots, device model/manufacturer,
+ * exception messages and arbitrary diagnostic details.
  */
 class MeshMessengerApp : Application() {
     private val crashFile by lazy { File(noBackupFilesDir, "pending-crash.txt") }
@@ -19,7 +20,7 @@ class MeshMessengerApp : Application() {
         super.onCreate()
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
-            recordCriticalFailure("uncaught thread=${thread.name}", error)
+            recordCriticalFailure("uncaught", error)
             previous?.uncaughtException(thread, error)
         }
         if (crashFile.isFile && crashFile.length() in 1..48_000) {
@@ -31,7 +32,7 @@ class MeshMessengerApp : Application() {
     fun recordCriticalFailure(label: String, error: Throwable) {
         runCatching {
             crashFile.writeText(buildString {
-                appendLine("event=${label.take(120)}")
+                appendLine("event=${label.take(80).replace(Regex("[\\r\\n]"), " ")}")
                 appendLine("exception=${error.javaClass.name}")
                 error.stackTrace.take(80).forEach { appendLine(" at $it") }
                 error.cause?.let { cause ->
@@ -39,13 +40,15 @@ class MeshMessengerApp : Application() {
                     cause.stackTrace.take(40).forEach { appendLine(" at $it") }
                 }
             }.take(48_000))
-        }.onFailure { Log.e("MeshMessenger", "Could not persist crash report", it) }
+        }.onFailure { Log.e("MeshMessenger", "Could not persist crash report") }
     }
 
     private fun uploadPendingCrash() {
         val trace = runCatching { crashFile.readText().take(48_000) }.getOrNull() ?: return
         val report = runCatching {
-            MeshBugReport.create(this, MeshDiagnostics(this), "automatic crash report", trace)
+            MeshBugReport.create(
+                this, MeshDiagnostics(this), "", trace, automatic = true
+            )
         }.getOrNull() ?: return
         try {
             val connection = (URL(REPORT_URL).openConnection() as HttpURLConnection).apply {
