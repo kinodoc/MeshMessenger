@@ -31,7 +31,7 @@ class MeshDiagnostics(context: Context) {
             "connection_state", "delivery_state", "ack_state", "retry_count",
             "foreground", "battery_optimization", "network_type", "validated"
         )
-        private val SAFE_VALUE = Regex("^[A-Za-z0-9_.:/-]{1,80}$")
+        private val SAFE_VALUE = Regex("^[A-Za-z0-9_.$:/-]{1,160}$")
     }
 
     private val file = File(context.filesDir, FILE_NAME)
