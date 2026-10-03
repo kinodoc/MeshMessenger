@@ -53,13 +53,13 @@ class MeshDiagnostics(context: Context) {
      * Shared privacy filter for manual and automatic reports.
      * Keeps event timing/category and allowlisted technical key-value fields only.
      */
-    fun readForUpload(): String = read().lineSequence().mapNotNull { line ->
+    fun readForUpload(): String = read().lineSequence().mapNotNull lineFilter@{ line ->
         val fields = line.split('|', limit = 5)
-        if (fields.size < 4) return@mapNotNull null
+        if (fields.size < 4) return@lineFilter null
         val details = fields.getOrNull(4).orEmpty().split(Regex("[,; ]+"))
-            .mapNotNull { token ->
+            .mapNotNull tokenFilter@{ token ->
                 val separator = token.indexOf('=')
-                if (separator <= 0) return@mapNotNull null
+                if (separator <= 0) return@tokenFilter null
                 val key = token.substring(0, separator).lowercase(Locale.US)
                 val value = token.substring(separator + 1)
                 if (key in safeDetailKeys && safeValue.matches(value)) "$key=$value" else null
