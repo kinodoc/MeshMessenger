@@ -41,6 +41,7 @@ class MeshDiagnostics(context: Context) {
             }
         }
     }
+
     fun crash(thread: Thread, throwable: Throwable) {
         event(
             "CRASH",
@@ -59,7 +60,8 @@ class MeshDiagnostics(context: Context) {
     private fun trimIfNeeded() {
         if (!file.exists() || file.length() <= MAX_FILE_BYTES) return
         val lines = file.readLines(Charsets.UTF_8)
-        val kept = lines.takeLast(MAX_LINES)
+        val start = (lines.size - MAX_LINES).coerceAtLeast(0)
+        val kept = lines.subList(start, lines.size)
         file.writeText(kept.joinToString("\n") + "\n", Charsets.UTF_8)
     }
 }
