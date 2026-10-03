@@ -19,14 +19,14 @@ class MeshDiagnostics(context: Context) {
         private const val MAX_LINES = 800
         private const val MAX_FILE_BYTES = 128 * 1024L
 
-        // Export only low-risk structured fields. Never export peer IDs or route identifiers.
+        // Only structured, low-risk fields leave the device. Never export peer or route IDs.
         private val uploadKeys = setOf(
             "state", "transport", "result", "reason", "error", "errorCode",
             "attempt", "retries", "queueSize", "durationMs", "packetType",
             "peerCount", "connected", "enabled", "httpStatus", "bytes",
-            "stage", "operation", "serviceState"
+            "stage", "operation", "serviceState", "component", "method", "line"
         )
-        private val safeValue = Regex("[A-Za-z][A-Za-z0-9_.:/+-]{0,79}|[0-9]{1,8}")
+        private val safeValue = Regex("[A-Za-z][A-Za-z0-9_.$:/+-]{0,79}|[0-9]{1,8}")
         private val privateIdentifier = Regex(
             "(?i)(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}|(?:[0-9]{1,3}\\.){3}[0-9]{1,3}|[0-9a-f]{8}-[0-9a-f-]{27,}|[0-9]{10,}"
         )
@@ -37,7 +37,8 @@ class MeshDiagnostics(context: Context) {
     private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
 
     fun event(type: String, detail: String = "") {
-        val safeType = type.replace(Regex("[^A-Za-z0-9_.-]"), "_").take(80)
+        val safeType = type.replace(Regex("[^A-Za-z0-9_.-]"), "_").take(80).ifBlank { "EVENT" }
+        // Keep each event on one line and prevent callers from injecting extra fields.
         val safeDetail = detail.replace(Regex("[\\r\\n|]"), " ").take(500)
         val line = buildString {
             append(formatter.format(Date()))
@@ -82,9 +83,23 @@ class MeshDiagnostics(context: Context) {
     }.joinToString("\n")
 
     fun crash(thread: Thread, throwable: Throwable) {
-        // Thread names and exception messages can contain arbitrary data; do not persist them.
-        event("CRASH", "error=${throwable.javaClass.simpleName}")
-        event("CRASH_STACK", throwable.stackTrace.take(40).joinToString(",") { it.toString() })
+        // Exception messages and thread names may contain private data; keep type and safe stack frames.
+        val exceptionType = throwable.javaClass.simpleName
+            .filter { it.isLetterOrDigit() || it == '_' }
+            .take(80)
+            .ifBlank { "UnknownException" }
+        event("CRASH", "error=$exceptionType")
+        throwable.stackTrace.take(40).forEach { frame ->
+            val component = frame.className
+                .filter { it.isLetterOrDigit() || it in "._$" }
+                .take(80)
+                .ifBlank { "unknown" }
+            val method = frame.methodName
+                .filter { it.isLetterOrDigit() || it in "_$" }
+                .take(60)
+                .ifBlank { "unknown" }
+            event("CRASH_FRAME", "component=$component,method=$method,line=${frame.lineNumber.coerceAtLeast(0)}")
+        }
     }
 
     fun read(): String = synchronized(lock) {
