@@ -10,7 +10,14 @@ import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
-/** Creates a diagnostic archive. Automatic reports use a minimized, redacted payload. */
+/**
+ * Creates a privacy-preserving diagnostic archive.
+ *
+ * Manual and automatic reports intentionally have the same contents so a
+ * crash report is no less useful than a report sent by the user. The device
+ * snapshot argument remains for source compatibility but is never exported.
+ * Diagnostic event details are filtered by MeshDiagnostics.readForUpload().
+ */
 object MeshBugReport {
     fun create(
         context: Context,
@@ -30,22 +37,15 @@ object MeshBugReport {
             appendLine("versionCode=${com.example.meshmessenger.BuildConfig.VERSION_CODE}")
             appendLine("android=${Build.VERSION.RELEASE}")
             appendLine("api=${Build.VERSION.SDK_INT}")
-            if (!automatic) {
-                appendLine("manufacturer=${Build.MANUFACTURER}")
-                appendLine("model=${Build.MODEL}")
-                appendLine("created=${Date()}")
-            }
         }
 
         ZipOutputStream(file.outputStream().buffered()).use { zip ->
             put(zip, "report.txt", meta)
-            if (!automatic && bluetoothSnapshot.isNotBlank()) {
-                put(zip, "bluetooth.txt", bluetoothSnapshot)
-            }
-            put(zip, "mesh_diagnostics.log",
-                if (automatic) diagnostics.readForUpload() else diagnostics.read())
+            // Use the same sanitized diagnostic stream for manual and automatic reports.
+            put(zip, "mesh_diagnostics.log", diagnostics.readForUpload())
             if (!crashTrace.isNullOrBlank()) {
-                // Automatic traces are already stored without exception messages.
+                // Callers must provide a sanitized trace: exception messages and local data
+                // must never be persisted in crashTrace.
                 put(zip, "crash_trace.txt", crashTrace.take(48_000))
             }
         }
