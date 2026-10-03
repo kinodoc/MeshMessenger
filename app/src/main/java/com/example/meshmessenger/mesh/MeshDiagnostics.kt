@@ -19,15 +19,17 @@ class MeshDiagnostics(context: Context) {
         private const val MAX_LINES = 800
         private const val MAX_FILE_BYTES = 128 * 1024L
 
-        // Only low-risk structured fields are exported. Values are restricted to simple
-        // diagnostic tokens; arbitrary strings are deliberately discarded.
+        // Export only low-risk structured fields. Never export peer IDs or route identifiers.
         private val uploadKeys = setOf(
-            "state", "from", "to", "transport", "result", "reason", "error",
-            "errorCode", "attempt", "retries", "queueSize", "durationMs",
-            "packetType", "route", "peerCount", "connected", "enabled",
-            "httpStatus", "bytes", "stage", "operation", "serviceState"
+            "state", "transport", "result", "reason", "error", "errorCode",
+            "attempt", "retries", "queueSize", "durationMs", "packetType",
+            "peerCount", "connected", "enabled", "httpStatus", "bytes",
+            "stage", "operation", "serviceState"
         )
-        private val safeValue = Regex("[A-Za-z0-9_.:/+-]{1,80}")
+        private val safeValue = Regex("[A-Za-z][A-Za-z0-9_.:/+-]{0,79}|[0-9]{1,8}")
+        private val privateIdentifier = Regex(
+            "(?i)(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}|(?:[0-9]{1,3}\\.){3}[0-9]{1,3}|[0-9a-f]{8}-[0-9a-f-]{27,}|[0-9]{10,}"
+        )
     }
 
     private val file = File(context.filesDir, FILE_NAME)
@@ -53,17 +55,16 @@ class MeshDiagnostics(context: Context) {
         }
     }
 
-    /**
-     * Export event order/timestamps and approved structured diagnostic fields only.
-     * Drops arbitrary detail text that could contain personal data or message content.
-     */
+    /** Preserve event order and approved values; discard arbitrary/private values. */
     fun readForUpload(): String = read().lineSequence().mapNotNull { line ->
         val fields = line.split('|', limit = 5)
         if (fields.size < 4) return@mapNotNull null
-        val timestamp = fields[0].takeIf { it.matches(Regex("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3}")) }
-            ?: return@mapNotNull null
-        val version = fields[1].removePrefix("v=").takeIf { it.matches(Regex("[A-Za-z0-9.+_-]{1,40}")) }
-            ?: return@mapNotNull null
+        val timestamp = fields[0].takeIf {
+            it.matches(Regex("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3}"))
+        } ?: return@mapNotNull null
+        val version = fields[1].removePrefix("v=").takeIf {
+            it.matches(Regex("[A-Za-z0-9.+_-]{1,40}"))
+        } ?: return@mapNotNull null
         val api = fields[2].removePrefix("api=").toIntOrNull()?.takeIf { it in 1..100 }
             ?: return@mapNotNull null
         val type = fields[3].takeIf { it.matches(Regex("[A-Za-z0-9_.-]{1,80}")) }
@@ -73,7 +74,7 @@ class MeshDiagnostics(context: Context) {
                 val split = token.split('=', limit = 2)
                 if (split.size != 2 || split[0] !in uploadKeys) return@mapNotNull null
                 val value = split[1]
-                if (!safeValue.matches(value)) return@mapNotNull null
+                if (!safeValue.matches(value) || privateIdentifier.containsMatchIn(value)) return@mapNotNull null
                 "${split[0]}=$value"
             }.take(20)
         } else emptyList()
@@ -86,16 +87,13 @@ class MeshDiagnostics(context: Context) {
         event("CRASH_STACK", throwable.stackTrace.take(40).joinToString(",") { it.toString() })
     }
 
-    fun read(): String {
-        synchronized(lock) {
-            return runCatching { file.readText(Charsets.UTF_8) }.getOrDefault("")
-        }
+    fun read(): String = synchronized(lock) {
+        runCatching { file.readText(Charsets.UTF_8) }.getOrDefault("")
     }
 
     private fun trimIfNeeded() {
         if (!file.exists() || file.length() <= MAX_FILE_BYTES) return
-        val lines = file.readLines(Charsets.UTF_8)
-        val kept = lines.takeLast(MAX_LINES)
+        val kept = file.readLines(Charsets.UTF_8).takeLast(MAX_LINES)
         file.writeText(kept.joinToString("\n") + "\n", Charsets.UTF_8)
     }
 }
