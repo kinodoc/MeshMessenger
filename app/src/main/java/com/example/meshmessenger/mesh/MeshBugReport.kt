@@ -30,6 +30,11 @@ object MeshBugReport {
             appendLine("versionCode=${com.example.meshmessenger.BuildConfig.VERSION_CODE}")
             appendLine("android=${Build.VERSION.RELEASE}")
             appendLine("api=${Build.VERSION.SDK_INT}")
+            // Hardware model helps reproduce vendor-specific BLE and background-service failures.
+            // Do not include serial numbers, Android ID, MAC addresses, or other device identifiers.
+            appendLine("deviceManufacturer=${Build.MANUFACTURER.take(80)}")
+            appendLine("deviceModel=${Build.MODEL.take(100)}")
+            appendLine("supportedAbis=${Build.SUPPORTED_ABIS.take(4).joinToString(",").take(160)}")
         }
 
         ZipOutputStream(file.outputStream().buffered()).use { zip ->
