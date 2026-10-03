@@ -1,0 +1,80 @@
+name: "Багрепорт MeshMessenger"
+description: "Сообщить о проблеме с BLE, Relay, контактами или запуском приложения"
+title: "[БАГ] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо за отчёт! Опишите проблему и, если возможно, приложите ZIP, созданный функцией диагностики MeshMessenger.
+
+        **Перед отправкой проверьте вложения:** удалите пароли, токены, приватные ключи и другие секреты. Репозиторий публичный, поэтому отчёт и вложения могут быть видны всем.
+  - type: dropdown
+    id: area
+    attributes:
+      label: "Где возникла проблема?"
+      options:
+        - "BLE — обнаружение или соединение"
+        - "BLE — отправка сообщения"
+        - "BLE — получение сообщения"
+        - "Relay — соединение или доставка"
+        - "Статус контакта онлайн/не в сети"
+        - "Запуск, зависание или закрытие приложения"
+        - "Каналы или интерфейс"
+        - "Другое"
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: "Версия приложения / versionCode"
+      placeholder: "Например: 0.24.49 / 75"
+    validations:
+      required: false
+  - type: input
+    id: device
+    attributes:
+      label: "Телефон и версия Android"
+      placeholder: "Например: UMIDIGI Power 7 MAX, Android 11"
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: "Что произошло?"
+      description: "Укажите текст ошибки, статус или поведение приложения."
+      placeholder: "Например: контакт сначала онлайн, затем не в сети; сообщение не доставлено."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: "Что должно было произойти?"
+    validations:
+      required: false
+  - type: textarea
+    id: steps
+    attributes:
+      label: "Как повторить проблему?"
+      description: "Укажите действия на обоих телефонах, если проблема связана с обменом сообщениями."
+      placeholder: |
+        1. На первом телефоне...
+        2. На втором телефоне...
+        3. Отправить сообщение...
+    validations:
+      required: false
+  - type: textarea
+    id: frequency
+    attributes:
+      label: "Как часто возникает проблема?"
+      placeholder: "Каждый раз / иногда / после ожидания / после переподключения"
+    validations:
+      required: false
+  - type: textarea
+    id: attachment
+    attributes:
+      label: "Диагностика и дополнительные сведения"
+      description: "После создания Issue прикрепите ZIP-багрепорт, снимки экрана или релевантные журналы. Вложения можно добавить к комментарию."
+      placeholder: "Имя ZIP-файла, время ошибки, ID сборки GitHub Actions или дополнительные детали."
+    validations:
+      required: false

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "Сообщить об уязвимости безопасности"
+    url: https://github.com/kinodoc/MeshMessenger/security/advisories/new
+    about: "Не публикуйте секреты, приватные ключи, токены и уязвимости в обычном багрепорте."
