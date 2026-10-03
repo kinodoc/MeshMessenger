@@ -29,7 +29,9 @@ class MeshDiagnostics(context: Context) {
             "queue_depth", "dropped_count", "timeout_ms", "latency_ms",
             "http_status", "failure_kind", "scan_state", "advertise_state",
             "connection_state", "delivery_state", "ack_state", "retry_count",
-            "foreground", "battery_optimization", "network_type", "validated"
+            "foreground", "battery_optimization", "network_type", "validated", "frame",
+            "frame_count", "target_sdk", "process_state", "service_state", "gatt_status",
+            "disconnect_reason", "write_status", "read_status", "mtu_status", "thread_state"
         )
         private val SAFE_VALUE = Regex("^[A-Za-z0-9_.:/-]{1,80}$")
     }
@@ -93,10 +95,14 @@ class MeshDiagnostics(context: Context) {
     fun crash(thread: Thread, throwable: Throwable) {
         // Thread names and exception messages can contain arbitrary application/user data.
         event("CRASH", "exception=" + throwable.javaClass.simpleName.filter { it.isLetterOrDigit() || it == '_' }.take(80))
-        event("CRASH_STACK", throwable.stackTrace.take(40).joinToString(",") {
-            it.className.filter { c -> c.isLetterOrDigit() || c in "._$" }.take(120) + ":" +
-                it.methodName.filter { c -> c.isLetterOrDigit() || c in "_$" }.take(80) + ":" + it.lineNumber
-        })
+        val frames = throwable.stackTrace.take(40)
+        event("CRASH_STACK", "frame_count=${frames.size}")
+        // Store frames as separate allowlisted fields; never persist exception messages.
+        frames.forEachIndexed { index, frame ->
+            val className = frame.className.filter { c -> c.isLetterOrDigit() || c in "._$" }.take(48)
+            val methodName = frame.methodName.filter { c -> c.isLetterOrDigit() || c in "_$" }.take(24)
+            event("CRASH_FRAME", "frame=${index}:${className}.${methodName}:${frame.lineNumber.coerceAtLeast(0)}")
+        }
     }
 
     fun read(): String = synchronized(lock) {
