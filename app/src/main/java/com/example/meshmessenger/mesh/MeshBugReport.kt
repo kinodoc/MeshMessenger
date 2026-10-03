@@ -16,46 +16,55 @@ object MeshBugReport {
         context: Context,
         diagnostics: MeshDiagnostics,
         bluetoothSnapshot: String,
-        crashTrace: String? = null
+        crashTrace: String? = null,
+        automatic: Boolean = false
     ): File {
         val dir = context.getExternalFilesDir("Download") ?: context.cacheDir
         dir.mkdirs()
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
         val file = File(dir, "MeshMessenger-bugreport-${stamp}.zip")
 
+        // Only technical environment information; no serial number, account, contacts,
+        // chat contents, network addresses, keys, or raw Bluetooth device snapshot.
         val meta = buildString {
-            appendLine("MeshMessenger diagnostic report")
+            appendLine("MeshMessenger bugreport")
             appendLine("version=${com.example.meshmessenger.BuildConfig.VERSION_NAME}")
             appendLine("versionCode=${com.example.meshmessenger.BuildConfig.VERSION_CODE}")
             appendLine("android=${Build.VERSION.RELEASE}")
             appendLine("api=${Build.VERSION.SDK_INT}")
-            appendLine("manufacturer=${Build.MANUFACTURER}")
-            appendLine("model=${Build.MODEL}")
-            appendLine("diagnostic_schema=2")
-            appendLine("created=${Date()}")
+            appendLine("manufacturer=${safeMeta(Build.MANUFACTURER)}")
+            appendLine("model=${safeMeta(Build.MODEL)}")
         }
-
-        // Do not archive raw Bluetooth snapshots: some Android implementations include
-        // nearby device names or addresses. The event log carries BLE state and error codes.
-        val bluetoothSummary = "Raw Bluetooth snapshot omitted for privacy. See mesh_diagnostics.log for BLE state events.\n"
-        val safeTrace = crashTrace.orEmpty().lineSequence()
-            .filter { it.startsWith("event=") || it.startsWith("exception=") || it.startsWith(" at ") || it.startsWith("cause=") }
-            .map { line ->
-                line.replace(Regex("(?i)(thread=)[^ ]+"), "$1[redacted]")
-                    .replace(Regex("(?i)(message|text|name|address|token|key)=([^ ]+)"), "$1=[redacted]")
-                    .take(500)
-            }
-            .take(140)
-            .joinToString("\n")
 
         ZipOutputStream(file.outputStream().buffered()).use { zip ->
             put(zip, "report.txt", meta)
-            put(zip, "bluetooth.txt", bluetoothSummary)
+            // Manual and automatic reports share the same filtered diagnostic stream.
             put(zip, "mesh_diagnostics.log", diagnostics.readForUpload())
-            if (safeTrace.isNotBlank()) put(zip, "crash_trace.txt", safeTrace.take(48_000))
+            if (!crashTrace.isNullOrBlank()) {
+                put(zip, "crash_trace.txt", safeCrashTrace(crashTrace))
+            }
         }
         return file
     }
+
+    private fun safeMeta(value: String): String =
+        value.replace(Regex("[^A-Za-z0-9_. -]"), "_").take(80)
+
+    /** Accept only exception class names and stack-frame symbols, never message text. */
+    private fun safeCrashTrace(trace: String): String = trace.lineSequence()
+        .mapNotNull { line ->
+            when {
+                line.startsWith("exception=") || line.startsWith("cause=") -> {
+                    val name = line.substringAfter('=').trim()
+                    if (name.matches(Regex("[A-Za-z0-9_.$]{1,160}"))) line else null
+                }
+                line.trimStart().startsWith("at ") -> {
+                    val frame = line.trim().removePrefix("at ").substringBefore('(')
+                    if (frame.matches(Regex("[A-Za-z0-9_.$]+"))) " at $frame" else null
+                }
+                else -> null
+            }
+        }.take(120).joinToString("\n")
 
     private fun put(zip: ZipOutputStream, name: String, text: String) {
         zip.putNextEntry(ZipEntry(name))
