@@ -41,14 +41,23 @@ object MeshBugReport {
         ZipOutputStream(file.outputStream().buffered()).use { zip ->
             put(zip, "report.txt", meta)
             put(zip, "mesh_diagnostics.log", diagnostics.readForUpload())
-            // A crash trace is included only if present. The app stores exception class and
-            // stack frames, never exception messages, chat content, contacts, or keys.
+            // The trace is independently allowlisted; never archive arbitrary caller input.
             if (!crashTrace.isNullOrBlank()) {
-                put(zip, "crash_trace.txt", crashTrace.take(48_000))
+                val safeTrace = sanitizeCrashTrace(crashTrace)
+                if (safeTrace.isNotBlank()) put(zip, "crash_trace.txt", safeTrace)
             }
         }
         return file
     }
+
+    private fun sanitizeCrashTrace(raw: String): String = raw.lineSequence().mapNotNull { line ->
+        when {
+            line.matches(Regex("^event=[A-Za-z0-9_.-]{1,80}$")) -> line
+            line.matches(Regex("^(exception|cause)=[A-Za-z0-9_.$]{1,180}$")) -> line
+            line.matches(Regex("^ at [A-Za-z0-9_.$]+\\.[A-Za-z0-9_$<>]+\\([^)]{0,180}\\)$")) -> line
+            else -> null
+        }
+    }.take(120).joinToString("\n")
 
     private fun put(zip: ZipOutputStream, name: String, text: String) {
         zip.putNextEntry(ZipEntry(name))
