@@ -180,18 +180,24 @@ class MeshForegroundService : Service() {
 
             ACTION_SEND_MESH -> {
                 val encoded = intent.getByteArrayExtra(EXTRA_PACKET)
+                diagnostics.event("PACKET_SEND_REQUEST", "bytes=${encoded?.size ?: 0} ble_ready=${node?.isHealthy() == true} relay_ready=${relayTransport != null}")
                 android.util.Log.d("MeshGattDiag", "service_send_mesh bytes=${encoded?.size ?: 0} nodeReady=${node != null}")
                 if (encoded != null) {
                     runCatching {
                         val packet = MeshPacket.decode(encoded)
                         if (packet != null) {
                             android.util.Log.d("MeshGattDiag", "service_packet_decoded id=${packet.messageId} src=${packet.sourceId.take(8)} dst=${packet.destinationId.take(8)}")
-                            node?.send(packet)
-                            relayTransport?.send(packet)
+                            diagnostics.event("PACKET_DECODED", "bytes=${encoded.size} ble_ready=${node?.isHealthy() == true} relay_ready=${relayTransport != null}")
+                            runCatching { node?.send(packet) }
+                                .onFailure { diagnostics.event("BLE_SEND_ERROR", "error_type=${it.javaClass.simpleName}") }
+                            runCatching { relayTransport?.send(packet) }
+                                .onFailure { diagnostics.event("RELAY_SEND_ERROR", "error_type=${it.javaClass.simpleName}") }
                         } else {
+                            diagnostics.event("PACKET_DECODE_ERROR", "bytes=${encoded.size}")
                             android.util.Log.w("MeshGattDiag", "service_packet_decode_failed bytes=${encoded.size}")
                         }
                     }.onFailure {
+                        diagnostics.event("PACKET_SEND_ERROR", "error_type=${it.javaClass.simpleName}")
                         updateNotification("Ошибка отправки Mesh-пакета")
                     }
                 }
