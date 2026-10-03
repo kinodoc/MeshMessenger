@@ -33,9 +33,11 @@ class MeshMessengerApp : Application() {
             crashFile.writeText(buildString {
                 appendLine("event=${label.take(120)}")
                 appendLine("exception=${error.javaClass.name}")
-                appendLine("message=${error.message.orEmpty().take(500)}")
                 error.stackTrace.take(80).forEach { appendLine(" at $it") }
-                error.cause?.let { appendLine("cause=${it.javaClass.name}: ${it.message.orEmpty().take(300)}") }
+                error.cause?.let { cause ->
+                    appendLine("cause=${cause.javaClass.name}")
+                    cause.stackTrace.take(40).forEach { appendLine(" at $it") }
+                }
             }.take(48_000))
         }.onFailure { Log.e("MeshMessenger", "Could not persist crash report", it) }
     }
@@ -68,7 +70,7 @@ class MeshMessengerApp : Application() {
                 connection.disconnect()
             }
         } catch (e: Exception) {
-            Log.w("MeshMessenger", "Automatic crash report deferred until next launch", e)
+            Log.w("MeshMessenger", "Automatic crash report deferred until next launch")
             report.delete()
         }
     }
