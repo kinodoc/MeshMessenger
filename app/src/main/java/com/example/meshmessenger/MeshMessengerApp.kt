@@ -18,6 +18,8 @@ class MeshMessengerApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Record lifecycle in the shared privacy-filtered stream for both report types.
+        runCatching { MeshDiagnostics(this).event("APP_START", "stage=application") }
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
             recordCriticalFailure("uncaught", error)
