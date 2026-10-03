@@ -18,12 +18,18 @@ class MeshDiagnostics(context: Context) {
         private const val MAX_LINES = 1200
         private const val MAX_FILE_BYTES = 192 * 1024L
 
-        // Only these fields are eligible for upload; unknown fields are discarded.
+        // Strict allowlist: diagnostics may describe behavior, never payloads or identities.
         private val SAFE_DETAIL_KEYS = setOf(
             "stage", "state", "result", "reason", "error", "code", "status",
             "transport", "operation", "attempt", "retry", "count", "queue",
             "duration_ms", "elapsed_ms", "api", "version", "connected",
-            "enabled", "permission", "mtu", "bytes", "service", "exception"
+            "enabled", "permission", "mtu", "bytes", "service", "exception",
+            "component", "event", "phase", "direction", "packet_type",
+            "route_state", "hop_count", "peer_count", "neighbor_count",
+            "queue_depth", "dropped_count", "timeout_ms", "latency_ms",
+            "http_status", "failure_kind", "scan_state", "advertise_state",
+            "connection_state", "delivery_state", "ack_state", "retry_count",
+            "foreground", "battery_optimization", "network_type", "validated"
         )
         private val SAFE_VALUE = Regex("^[A-Za-z0-9_.:/-]{1,80}$")
     }
@@ -51,21 +57,26 @@ class MeshDiagnostics(context: Context) {
         }
     }
 
-    /** Shared payload for manual and automatic reports: safe fields, same event history. */
+    /** Shared payload for manual and automatic reports: same redacted event history. */
     fun readForUpload(): String = read().lineSequence().mapNotNull { line ->
         val fields = line.split('|', limit = 5)
         if (fields.size < 4) return@mapNotNull null
-        val timestamp = fields[0].takeIf { it.matches(Regex("^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3}$")) }
+        val timestamp = fields[0].takeIf {
+            it.matches(Regex("^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3}$"))
+        } ?: return@mapNotNull null
+        val version = fields[1].takeIf { it.matches(Regex("^v=[A-Za-z0-9._+-]{1,40}$")) }
             ?: return@mapNotNull null
-        val version = fields[1].takeIf { it.matches(Regex("^v=[A-Za-z0-9._+-]{1,40}$")) } ?: return@mapNotNull null
-        val api = fields[2].takeIf { it.matches(Regex("^api=\\d{1,3}$")) } ?: return@mapNotNull null
+        val api = fields[2].takeIf { it.matches(Regex("^api=\\d{1,3}$")) }
+            ?: return@mapNotNull null
         val type = fields[3].filter { it.isLetterOrDigit() || it in "._-" }.take(80).ifBlank { "EVENT" }
         val details = if (fields.size == 5) sanitizeDetails(fields[4]) else ""
-        listOf(timestamp, version, api, type, details).filterIndexed { index, value -> index < 4 || value.isNotBlank() }.joinToString("|")
+        listOf(timestamp, version, api, type, details)
+            .filterIndexed { index, value -> index < 4 || value.isNotBlank() }
+            .joinToString("|")
     }.takeLast(MAX_LINES).joinToString("\n")
 
-    private fun sanitizeDetails(raw: String): String {
-        return raw.split('|', ',', ';', ' ')
+    private fun sanitizeDetails(raw: String): String =
+        raw.split('|', ',', ';', ' ')
             .mapNotNull { token ->
                 val split = token.split('=', limit = 2)
                 if (split.size != 2) return@mapNotNull null
@@ -75,17 +86,16 @@ class MeshDiagnostics(context: Context) {
                 "$key=$value"
             }
             .distinct()
-            .take(20)
+            .take(30)
             .joinToString(",")
-            .take(600)
-    }
+            .take(900)
 
     fun crash(thread: Thread, throwable: Throwable) {
         // Thread names and exception messages can contain arbitrary application/user data.
         event("CRASH", "exception=" + throwable.javaClass.simpleName.filter { it.isLetterOrDigit() || it == '_' }.take(80))
         event("CRASH_STACK", throwable.stackTrace.take(40).joinToString(",") {
-            (it.className.filter { c -> c.isLetterOrDigit() || c in "._$" }.take(120) + ":" +
-                it.methodName.filter { c -> c.isLetterOrDigit() || c in "_$" }.take(80) + ":" + it.lineNumber)
+            it.className.filter { c -> c.isLetterOrDigit() || c in "._$" }.take(120) + ":" +
+                it.methodName.filter { c -> c.isLetterOrDigit() || c in "_$" }.take(80) + ":" + it.lineNumber
         })
     }
 
