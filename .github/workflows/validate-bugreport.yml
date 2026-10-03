@@ -4,7 +4,8 @@ on:
   pull_request:
     paths:
       - "bugreport-server/**"
-      - "app/src/main/java/com/example/meshmessenger/MainActivity.kt"
+      - "app/src/main/**"
+      - "app/build.gradle.kts"
       - ".github/workflows/validate-bugreport.yml"
   workflow_dispatch:
 
