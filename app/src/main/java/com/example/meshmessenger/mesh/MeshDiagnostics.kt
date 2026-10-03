@@ -75,7 +75,7 @@ class MeshDiagnostics(context: Context) {
         listOf(timestamp, version, api, type, details)
             .filterIndexed { index, value -> index < 4 || value.isNotBlank() }
             .joinToString("|")
-    }.takeLast(MAX_LINES).joinToString("\n")
+    }.toList().takeLast(MAX_LINES).joinToString("\n")
 
     private fun sanitizeDetails(raw: String): String =
         raw.split('|', ',', ';', ' ')
