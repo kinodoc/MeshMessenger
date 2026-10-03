@@ -1,6 +1,13 @@
 name: Validate bug report changes
 
 on:
+  push:
+    branches: ["bugs"]
+    paths:
+      - "bugreport-server/**"
+      - "app/src/main/**"
+      - "app/build.gradle.kts"
+      - ".github/workflows/validate-bugreport.yml"
   pull_request:
     paths:
       - "bugreport-server/**"

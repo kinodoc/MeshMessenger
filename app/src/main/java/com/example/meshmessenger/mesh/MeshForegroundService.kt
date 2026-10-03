@@ -264,8 +264,10 @@ class MeshForegroundService : Service() {
                 },
                 onPeerCount = { count ->
                     relayPeerCount = count
+                    diagnostics.event("RELAY_PEER_COUNT", "count=$count")
                     sendPeerStatus()
-                }
+                },
+                onDiagnostic = { type, detail -> diagnostics.event(type, detail) }
             ).also { it.start() }
         }.onFailure {
             relayTransport = null
