@@ -30,20 +30,13 @@ object MeshBugReport {
             appendLine("versionCode=${com.example.meshmessenger.BuildConfig.VERSION_CODE}")
             appendLine("android=${Build.VERSION.RELEASE}")
             appendLine("api=${Build.VERSION.SDK_INT}")
-            if (!automatic) {
-                appendLine("manufacturer=${Build.MANUFACTURER}")
-                appendLine("model=${Build.MODEL}")
-                appendLine("created=${Date()}")
-            }
         }
 
         ZipOutputStream(file.outputStream().buffered()).use { zip ->
             put(zip, "report.txt", meta)
-            if (!automatic && bluetoothSnapshot.isNotBlank()) {
-                put(zip, "bluetooth.txt", bluetoothSnapshot)
-            }
-            put(zip, "mesh_diagnostics.log",
-                if (automatic) diagnostics.readForUpload() else diagnostics.read())
+            // Manual and automatic reports share the same privacy-filtered diagnostics.
+            // Raw Bluetooth snapshots can contain identifiers and are intentionally excluded.
+            put(zip, "mesh_diagnostics.log", diagnostics.readForUpload())
             if (!crashTrace.isNullOrBlank()) {
                 // Automatic traces are already stored without exception messages.
                 put(zip, "crash_trace.txt", crashTrace.take(48_000))
