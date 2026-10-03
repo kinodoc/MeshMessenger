@@ -31,7 +31,7 @@ class MeshMessengerApp : Application() {
     fun recordCriticalFailure(label: String, error: Throwable) {
         runCatching {
             crashFile.writeText(buildString {
-                appendLine("event=${label.replace(Regex(\"[^A-Za-z0-9_-]\"), \"_\").take(80)}")
+                appendLine("event=" + label.replace(Regex("[^A-Za-z0-9_-]"), "_").take(80))
                 appendLine("exception=${error.javaClass.name}")
                 error.stackTrace.take(80).forEach { appendLine(" at $it") }
                 error.cause?.let { cause ->
