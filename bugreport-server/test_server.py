@@ -63,3 +63,118 @@ class FingerprintTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# HTTP-level integration tests. The outbound GitHub API is always mocked;
+# these tests can never create real GitHub issues.
+import http.client
+import json
+import threading
+import urllib.error
+from unittest import mock
+
+
+class MockGitHubResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self, limit=-1):
+        return self.payload[:limit]
+
+
+class HttpHandlerTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.port = cls.httpd.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+        cls.thread.join(timeout=2)
+
+    def setUp(self):
+        self.old_token = server.TOKEN
+        server.TOKEN = "test-token-not-a-real-secret"
+        server.rates.clear()
+        report_dir = Path(os.environ["REPORT_DIR"])
+        report_dir.mkdir(parents=True, exist_ok=True)
+        for path in report_dir.glob("*.zip"):
+            path.unlink()
+        with __import__("sqlite3").connect(os.environ["BUGREPORT_DB"]) as db:
+            db.execute("DELETE FROM reports")
+
+    def tearDown(self):
+        server.TOKEN = self.old_token
+
+    def post(self, payload):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
+        try:
+            connection.request(
+                "POST", "/api/bugreports", body=payload,
+                headers={"Content-Type": "application/zip",
+                         "Content-Length": str(len(payload)),
+                         "X-Mesh-Version": "0.99-test"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read().decode("utf-8"))
+        finally:
+            connection.close()
+
+    def test_post_success_creates_one_issue_and_private_archive(self):
+        payload = archive("ERROR MeshRouter: mocked success\\n at MeshRouter.send(MeshRouter.kt:7)\\n")
+        with mock.patch.object(
+            server.urllib.request, "urlopen",
+            return_value=MockGitHubResponse(b'{"number":123}')) as github:
+            status, body = self.post(payload)
+        self.assertEqual(status, 201)
+        self.assertEqual(body, {"ok": True, "duplicate": False, "status": "sent"})
+        self.assertEqual(github.call_count, 1)
+        saved = list(Path(os.environ["REPORT_DIR"]).glob("*.zip"))
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0].read_bytes(), payload)
+        self.assertEqual(saved[0].stat().st_mode & 0o777, 0o600)
+
+    def test_duplicate_returns_existing_result_without_second_github_call(self):
+        payload = archive("ERROR MeshRouter: duplicate test\\n at MeshRouter.send(MeshRouter.kt:8)\\n")
+        with mock.patch.object(
+            server.urllib.request, "urlopen",
+            return_value=MockGitHubResponse(b'{"number":124}')) as github:
+            first_status, first_body = self.post(payload)
+            second_status, second_body = self.post(payload)
+        self.assertEqual(first_status, 201)
+        self.assertEqual(second_status, 200)
+        self.assertTrue(first_body["ok"])
+        self.assertTrue(second_body["duplicate"])
+        self.assertEqual(github.call_count, 1)
+
+    def test_invalid_zip_returns_400_without_calling_github(self):
+        with mock.patch.object(server.urllib.request, "urlopen") as github:
+            status, body = self.post(b"not a zip archive")
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"], "invalid_zip")
+        github.assert_not_called()
+        self.assertEqual(list(Path(os.environ["REPORT_DIR"]).glob("*.zip")), [])
+
+    def test_github_api_rejection_returns_502_and_removes_archive(self):
+        payload = archive("ERROR MeshRouter: upstream rejection\\n at MeshRouter.send(MeshRouter.kt:9)\\n")
+        error = urllib.error.HTTPError(
+            "https://api.github.com/repos/kinodoc/MeshMessenger/issues",
+            403, "mock forbidden", {}, None)
+        with mock.patch.object(server.urllib.request, "urlopen", side_effect=error) as github:
+            status, body = self.post(payload)
+        self.assertEqual(status, 502)
+        self.assertFalse(body["ok"])
+        self.assertEqual(body["error"], "github_rejected_report")
+        github.assert_called_once()
+        self.assertEqual(list(Path(os.environ["REPORT_DIR"]).glob("*.zip")), [])
+        with __import__("sqlite3").connect(os.environ["BUGREPORT_DB"]) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM reports").fetchone()[0], 0)
