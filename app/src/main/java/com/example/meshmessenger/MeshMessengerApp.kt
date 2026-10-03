@@ -10,7 +10,7 @@ import java.net.URL
 
 /**
  * Crash reports are persisted locally by the uncaught handler and uploaded on the next
- * app launch. Uploads contain diagnostics only; chat stores and identity keys are not read.
+ * app launch. Reports include the shared privacy-filtered diagnostics, not chat data.
  */
 class MeshMessengerApp : Application() {
     private val crashFile by lazy { File(noBackupFilesDir, "pending-crash.txt") }
@@ -39,13 +39,13 @@ class MeshMessengerApp : Application() {
                     cause.stackTrace.take(40).forEach { appendLine(" at $it") }
                 }
             }.take(48_000))
-        }.onFailure { Log.e("MeshMessenger", "Could not persist crash report", it) }
+        }.onFailure { Log.e("MeshMessenger", "Could not persist crash report") }
     }
 
     private fun uploadPendingCrash() {
         val trace = runCatching { crashFile.readText().take(48_000) }.getOrNull() ?: return
         val report = runCatching {
-            MeshBugReport.create(this, MeshDiagnostics(this), "automatic crash report", trace)
+            MeshBugReport.create(this, MeshDiagnostics(this), "", trace, automatic = true)
         }.getOrNull() ?: return
         try {
             val connection = (URL(REPORT_URL).openConnection() as HttpURLConnection).apply {
