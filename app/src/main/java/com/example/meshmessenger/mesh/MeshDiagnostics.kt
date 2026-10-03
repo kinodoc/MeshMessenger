@@ -93,10 +93,17 @@ class MeshDiagnostics(context: Context) {
     fun crash(thread: Thread, throwable: Throwable) {
         // Thread names and exception messages can contain arbitrary application/user data.
         event("CRASH", "exception=" + throwable.javaClass.simpleName.filter { it.isLetterOrDigit() || it == '_' }.take(80))
-        event("CRASH_STACK", throwable.stackTrace.take(40).joinToString(",") {
-            it.className.filter { c -> c.isLetterOrDigit() || c in "._$" }.take(120) + ":" +
-                it.methodName.filter { c -> c.isLetterOrDigit() || c in "_$" }.take(80) + ":" + it.lineNumber
-        })
+        // Preserve useful stack context as structured allowlisted fields.
+        // A raw comma-separated stack was discarded by sanitizeDetails.
+        throwable.stackTrace.take(40).forEach { frame ->
+            val component = frame.className
+                .filter { c -> c.isLetterOrDigit() || c in "._$" }.take(120)
+                .ifBlank { "unknown" }
+            val operation = frame.methodName
+                .filter { c -> c.isLetterOrDigit() || c in "_$" }.take(80)
+                .ifBlank { "unknown" }
+            event("CRASH_FRAME", "component=$component,operation=$operation,code=${frame.lineNumber.coerceAtLeast(0)}")
+        }
     }
 
     fun read(): String = synchronized(lock) {
