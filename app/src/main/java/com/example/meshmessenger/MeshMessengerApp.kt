@@ -19,20 +19,25 @@ class MeshMessengerApp : Application() {
         super.onCreate()
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
-            runCatching {
-                crashFile.writeText(buildString {
-                    appendLine("thread=${thread.name.take(80)}")
-                    appendLine("exception=${error.javaClass.name}")
-                    appendLine("message=${error.message.orEmpty().take(500)}")
-                    error.stackTrace.take(80).forEach { appendLine(" at $it") }
-                    error.cause?.let { appendLine("cause=${it.javaClass.name}: ${it.message.orEmpty().take(300)}") }
-                })
-            }.onFailure { Log.e("MeshMessenger", "Could not persist crash report", it) }
+            recordCriticalFailure("uncaught thread=${thread.name}", error)
             previous?.uncaughtException(thread, error)
         }
         if (crashFile.isFile && crashFile.length() in 1..48_000) {
             Thread({ uploadPendingCrash() }, "mesh-crash-report").apply { isDaemon = true; start() }
         }
+    }
+
+    /** Save critical startup/mesh failures for automatic upload on the next launch. */
+    fun recordCriticalFailure(label: String, error: Throwable) {
+        runCatching {
+            crashFile.writeText(buildString {
+                appendLine("event=${label.take(120)}")
+                appendLine("exception=${error.javaClass.name}")
+                appendLine("message=${error.message.orEmpty().take(500)}")
+                error.stackTrace.take(80).forEach { appendLine(" at $it") }
+                error.cause?.let { appendLine("cause=${it.javaClass.name}: ${it.message.orEmpty().take(300)}") }
+            }.take(48_000))
+        }.onFailure { Log.e("MeshMessenger", "Could not persist crash report", it) }
     }
 
     private fun uploadPendingCrash() {
