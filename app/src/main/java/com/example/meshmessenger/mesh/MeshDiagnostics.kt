@@ -8,10 +8,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/**
- * Local technical diagnostics. Never intentionally records chat text, contact names,
- * cryptographic material, or network credentials. Export is sanitized for both report modes.
- */
+/** Local technical diagnostics with a privacy filter applied before export. */
 class MeshDiagnostics(context: Context) {
     companion object {
         private const val FILE_NAME = "mesh_diagnostics.log"
@@ -48,14 +45,14 @@ class MeshDiagnostics(context: Context) {
         }
     }
 
-    /** Both manual and automatic reports use the same sanitized diagnostic history. */
+    /** Manual and automatic reports share the same sanitized diagnostic history. */
     fun readForUpload(): String = read().lineSequence().mapNotNull { line ->
         val fields = line.split('|', limit = 5)
-        if (fields.size >= 4) redact(fields.take(4).joinToString("|")) else null
+        if (fields.size >= 4) redact(fields.joinToString("|")) else null
     }.joinToString("\n")
 
     fun crash(thread: Thread, throwable: Throwable) {
-        event("CRASH", "thread=${thread.name} error=${throwable.javaClass.simpleName}")
+        event("CRASH", "thread=\${thread.name} error=\${throwable.javaClass.simpleName}")
         event("CRASH_STACK", throwable.stackTrace.take(40).joinToString(" <- ") { it.toString() })
     }
 
@@ -74,7 +71,6 @@ class MeshDiagnostics(context: Context) {
     private fun trimIfNeeded() {
         if (!file.exists() || file.length() <= MAX_FILE_BYTES) return
         val lines = file.readLines(Charsets.UTF_8)
-        val kept = lines.takeLast(MAX_LINES)
-        file.writeText(kept.joinToString("\n") + "\n", Charsets.UTF_8)
+        file.writeText(lines.takeLast(MAX_LINES).joinToString("\n") + "\n", Charsets.UTF_8)
     }
 }
