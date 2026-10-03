@@ -15,7 +15,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <application android:theme="@style/Theme.MeshMessenger" android:label="Mesh Messenger" android:allowBackup="false" android:supportsRtl="true">
+    <application android:name=".MeshMessengerApp" android:theme="@style/Theme.MeshMessenger" android:label="Mesh Messenger" android:allowBackup="false" android:supportsRtl="true">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

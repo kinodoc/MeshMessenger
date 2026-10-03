@@ -15,7 +15,8 @@ object MeshBugReport {
     fun create(
         context: Context,
         diagnostics: MeshDiagnostics,
-        bluetoothSnapshot: String
+        bluetoothSnapshot: String,
+        crashTrace: String? = null
     ): File {
         val dir = context.getExternalFilesDir("Download") ?: context.cacheDir
         dir.mkdirs()
@@ -37,6 +38,7 @@ object MeshBugReport {
             put(zip, "report.txt", meta)
             put(zip, "bluetooth.txt", bluetoothSnapshot)
             put(zip, "mesh_diagnostics.log", diagnostics.read())
+            if (!crashTrace.isNullOrBlank()) put(zip, "crash_trace.txt", crashTrace.take(48_000))
         }
         return file
     }
