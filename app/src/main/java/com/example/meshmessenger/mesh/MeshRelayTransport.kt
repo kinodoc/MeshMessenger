@@ -49,6 +49,10 @@ class MeshRelayTransport(
     @Volatile private var writer: BufferedWriter? = null
     @Volatile private var reader: BufferedReader? = null
     @Volatile private var lastPingAt = 0L
+    private data class RetryState(val attempt: Int, val lastAttemptAt: Long)
+    private val retryStates = ConcurrentHashMap<String, RetryState>()
+    @Volatile private var lastAcceptedDiagnosticAt = 0L
+    private var acceptedSinceDiagnostic = 0
 
     private val sslContext: SSLContext by lazy {
         val trust = object : X509TrustManager {
@@ -107,9 +111,17 @@ class MeshRelayTransport(
         peers.forEach { (id, peer) ->
             onPeer(id, peer.name, peer.publicKey, "")
         }
-        queue.snapshot().take(32).forEach { entry ->
+        val entries = queue.snapshot().take(32)
+        val queuedIds = entries.mapTo(HashSet()) { it.id.toString() }
+        retryStates.keys.removeAll { it !in queuedIds }
+        entries.forEach { entry ->
+            val id = entry.id.toString()
+            val state = retryStates.putIfAbsent(id, RetryState(0, now)) ?: RetryState(0, now)
+            val delay = (5_000L * (1L shl state.attempt.coerceAtMost(6))).coerceAtMost(300_000L)
+            if (now - state.lastAttemptAt < delay) return@forEach
             val packet = MeshPacket.decode(entry.bytes) ?: return@forEach
-            send(packet)
+            if (send(packet)) retryStates[id] = RetryState(state.attempt + 1, now)
+            else retryStates[id] = RetryState(state.attempt + 1, now)
         }
     }
 
@@ -200,7 +212,15 @@ class MeshRelayTransport(
                     send(next)
                 }
             }
-            "accepted" -> onDiagnostic("RELAY_PACKET", "stage=accepted online=${msg.optBoolean("online")}")
+            "accepted" -> {
+                acceptedSinceDiagnostic++
+                val now = System.currentTimeMillis()
+                if (lastAcceptedDiagnosticAt == 0L || now - lastAcceptedDiagnosticAt >= 60_000L) {
+                    onDiagnostic("RELAY_PACKET", "stage=accepted online=${msg.optBoolean("online")} count=${acceptedSinceDiagnostic}")
+                    acceptedSinceDiagnostic = 0
+                    lastAcceptedDiagnosticAt = now
+                }
+            }
             "error" -> onDiagnostic("RELAY_SERVER_ERROR", "code=${msg.optString("code", "unspecified").take(40)}")
             "pong" -> Unit
         }
