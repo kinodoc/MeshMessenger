@@ -29,7 +29,11 @@ class MeshDiagnostics(context: Context) {
             "queue_depth", "dropped_count", "timeout_ms", "latency_ms",
             "http_status", "failure_kind", "scan_state", "advertise_state",
             "connection_state", "delivery_state", "ack_state", "retry_count",
-            "foreground", "battery_optimization", "network_type", "validated"
+            "foreground", "battery_optimization", "network_type", "validated",
+            "ble", "profile", "message_stage", "delivery_result", "error_kind",
+            "retry_reason", "disconnect_reason", "permission_state", "adapter_state",
+            "node_state", "relay_state", "operation_result", "queue_wait_ms",
+            "packet_bytes", "service_state", "failure_stage", "startup_stage"
         )
         private val SAFE_VALUE = Regex("^[A-Za-z0-9_.$:/-]{1,160}$")
     }
