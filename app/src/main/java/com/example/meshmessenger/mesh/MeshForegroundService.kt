@@ -505,17 +505,10 @@ class MeshForegroundService : Service() {
         )
     }
 
-    override fun onDestroy() {
-        retryHandler.removeCallbacks(autoBugReportRunnable)
-        retryHandler.removeCallbacks(retryRunnable)
-        retryHandler.removeCallbacks(watchdogRunnable)
-        bluetoothMonitor.stop()
-        super.onDestroy()
-    }
-
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        retryHandler.removeCallbacks(autoBugReportRunnable)
         retryHandler.removeCallbacks(watchdogRunnable)
         retryHandler.removeCallbacks(retryRunnable)
         bluetoothMonitor.stop()
