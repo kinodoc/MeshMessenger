@@ -2,7 +2,7 @@ name: Validate bug report changes
 
 on:
   push:
-    branches: ["bugs"]
+    branches: ["bugs", "main"]
     paths:
       - "bugreport-server/**"
       - "app/src/main/**"
@@ -55,3 +55,10 @@ jobs:
             find "$HOME/.gradle/wrapper/dists" -type f -path "*/bin/gradle" -exec chmod +x {} + 2>/dev/null || true
             ./gradlew --no-daemon :app:assembleDebug
           }
+      - name: Upload debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeshMessenger-debug-${{ github.sha }}
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
