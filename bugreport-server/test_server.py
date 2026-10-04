@@ -30,6 +30,25 @@ class FingerprintTests(unittest.TestCase):
             "java.lang.IllegalStateException: no peer\n at MeshRouter.send(MeshRouter.kt:42)\n")
         self.assertEqual(server.fingerprint_zip(first), server.fingerprint_zip(second))
 
+    def test_repeated_status_snapshots_and_created_time_are_ignored(self):
+        first = archive(
+            "created=2026-10-04T10:00:00Z\n"
+            "2026-10-04 10:00:01| STATUS|ble=0,relay=0\n"
+            "2026-10-04 10:00:02| STATUS|ble=0,relay=0\n"
+            "2026-10-04 10:00:03| ERROR|GATT connection timeout\n")
+        second = archive(
+            "created=2026-10-05T11:30:00Z\n"
+            "2026-10-05 11:30:01| STATUS|ble=0,relay=0\n"
+            "2026-10-05 11:30:03| ERROR|GATT connection timeout\n")
+        self.assertEqual(server.fingerprint_zip(first), server.fingerprint_zip(second))
+
+    def test_distinct_status_transition_is_not_removed(self):
+        first = archive("2026-10-04 10:00:01| STATUS|ble=0,relay=0\n")
+        second = archive(
+            "2026-10-04 10:00:01| STATUS|ble=0,relay=0\n"
+            "2026-10-04 10:00:02| STATUS|ble=1,relay=0\n")
+        self.assertNotEqual(server.fingerprint_zip(first), server.fingerprint_zip(second))
+
     def test_different_stack_is_not_deduplicated(self):
         first = archive("ERROR: connection refused\n at MeshRouter.send(MeshRouter.kt:42)")
         second = archive("ERROR: connection refused\n at MeshRouter.send(MeshRouter.kt:99)")

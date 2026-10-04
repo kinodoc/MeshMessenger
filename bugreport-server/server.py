@@ -62,7 +62,21 @@ def fingerprint_zip(data):
                 text = re.sub(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}\b", "<UUID>", text)
                 text = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "<IP>", text)
                 text = re.sub(r"\b\d{10,13}\b", "<TIME>", text)
-                text = re.sub(r"\s+", " ", text).strip().lower()
+                # Repeated STATUS snapshots are periodic state telemetry, not new failures.
+                # Drop only exact duplicate STATUS lines after timestamp/volatile-field normalization;
+                # preserve order and all distinct status transitions and error lines.
+                normalized_lines = []
+                seen_status = set()
+                for line in text.splitlines():
+                    line = re.sub(r"\s+", " ", line).strip().lower()
+                    if not line:
+                        continue
+                    if re.search(r"\bstatus\b", line):
+                        if line in seen_status:
+                            continue
+                        seen_status.add(line)
+                    normalized_lines.append(line)
+                text = " ".join(normalized_lines)
                 if text:
                     parts.append(name + ":" + text[:200_000])
     except (zipfile.BadZipFile, OSError, ValueError) as exc:
