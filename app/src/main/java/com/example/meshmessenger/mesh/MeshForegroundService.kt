@@ -202,8 +202,13 @@ class MeshForegroundService : Service() {
                                 diagnostics.event("MESSAGE_SEND_SKIPPED", "transport=ble,error_kind=node_unavailable")
                             }
                             if (relayTransport != null) {
-                                runCatching { relayTransport?.send(packet) }
-                                    .onSuccess { diagnostics.event("MESSAGE_SEND_ATTEMPT", "transport=relay,delivery_result=queued") }
+                                runCatching { relayTransport?.send(packet) == true }
+                                    .onSuccess { accepted ->
+                                        diagnostics.event(
+                                            if (accepted) "MESSAGE_SEND_ATTEMPT" else "MESSAGE_SEND_FAILED",
+                                            "transport=relay,delivery_result=${if (accepted) "queued" else "not_accepted"},error_kind=${if (accepted) "none" else "relay_not_ready"}"
+                                        )
+                                    }
                                     .onFailure { diagnostics.event("MESSAGE_SEND_FAILED", "transport=relay,error_kind=send_exception") }
                             } else {
                                 diagnostics.event("MESSAGE_SEND_SKIPPED", "transport=relay,error_kind=transport_unavailable")
