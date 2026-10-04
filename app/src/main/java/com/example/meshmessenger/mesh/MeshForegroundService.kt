@@ -9,6 +9,8 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -18,6 +20,7 @@ import androidx.core.app.NotificationCompat
 import com.example.meshmessenger.MainActivity
 import com.example.meshmessenger.R
 import java.net.InetAddress
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Keeps the mesh transports alive while the UI is not visible. */
 class MeshForegroundService : Service() {
@@ -48,6 +51,8 @@ class MeshForegroundService : Service() {
         const val EXTRA_DELIVERED_PACKET_ID = "delivered_packet_id"
 
         private const val RETRY_INTERVAL_MS = 5_000L
+        private const val AUTO_BUGREPORT_INTERVAL_MS = 3L * 60L * 60L * 1000L
+        private const val AUTO_BUGREPORT_OFFLINE_RETRY_MS = 15L * 60L * 1000L
         private const val PREFS = "mesh_runtime"
         private const val KEY_ENABLED = "mesh_enabled"
     }
@@ -65,6 +70,44 @@ class MeshForegroundService : Service() {
     private lateinit var bluetoothMonitor: MeshBluetoothMonitor
 
     private val retryHandler = Handler(Looper.getMainLooper())
+    private val autoBugReportInProgress = AtomicBoolean(false)
+
+    private fun hasValidatedNetwork(): Boolean = runCatching {
+        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = manager.activeNetwork ?: return false
+        val capabilities = manager.getNetworkCapabilities(network) ?: return false
+        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }.getOrDefault(false)
+
+    private val autoBugReportRunnable = object : Runnable {
+        override fun run() {
+            if (!hasValidatedNetwork()) {
+                diagnostics.event("BUGREPORT_AUTO_DEFERRED", "reason=no_validated_network")
+                retryHandler.postDelayed(this, AUTO_BUGREPORT_OFFLINE_RETRY_MS)
+                return
+            }
+            if (!autoBugReportInProgress.compareAndSet(false, true)) {
+                diagnostics.event("BUGREPORT_AUTO_SKIPPED", "reason=upload_in_progress")
+                retryHandler.postDelayed(this, AUTO_BUGREPORT_INTERVAL_MS)
+                return
+            }
+            Thread {
+                try {
+                    val report = MeshBugReport.create(this@MeshForegroundService, diagnostics, bluetoothMonitor.snapshot())
+                    val result = MeshBugReportUploader.upload(report)
+                    report.delete()
+                    diagnostics.event("BUGREPORT_AUTO_UPLOAD", "result=$result")
+                } catch (error: Exception) {
+                    diagnostics.event("BUGREPORT_AUTO_ERROR", "error_type=${error.javaClass.simpleName}")
+                    android.util.Log.w("MeshMessenger", "Automatic bug report upload failed", error)
+                } finally {
+                    autoBugReportInProgress.set(false)
+                    retryHandler.postDelayed(autoBugReportRunnable, AUTO_BUGREPORT_INTERVAL_MS)
+                }
+            }.start()
+        }
+    }
 
     private val watchdogRunnable = object : Runnable {
         override fun run() {
@@ -135,6 +178,7 @@ class MeshForegroundService : Service() {
         contacts = ContactStore(this)
         chats = ChatStore(this)
         retryHandler.post(retryRunnable)
+        retryHandler.postDelayed(autoBugReportRunnable, AUTO_BUGREPORT_INTERVAL_MS)
         meshEnabled = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_ENABLED, true)
         // The internet relay stays active independently of the BLE mesh toggle.
         startMesh(startBle = meshEnabled)
@@ -459,6 +503,14 @@ class MeshForegroundService : Service() {
             NOTIFICATION_ID,
             notification(text)
         )
+    }
+
+    override fun onDestroy() {
+        retryHandler.removeCallbacks(autoBugReportRunnable)
+        retryHandler.removeCallbacks(retryRunnable)
+        retryHandler.removeCallbacks(watchdogRunnable)
+        bluetoothMonitor.stop()
+        super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
