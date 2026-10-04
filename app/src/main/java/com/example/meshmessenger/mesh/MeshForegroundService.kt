@@ -26,7 +26,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 class MeshForegroundService : Service() {
     companion object {
         private const val CHANNEL_ID = "mesh_runtime"
+        private const val MESSAGE_CHANNEL_ID = "mesh_messages"
         private const val NOTIFICATION_ID = 1001
+        private const val MESSAGE_NOTIFICATION_ID = 2001
 
         const val ACTION_APP_START = "com.example.meshmessenger.APP_START"
         const val ACTION_START = "com.example.meshmessenger.START_MESH"
@@ -176,6 +178,7 @@ class MeshForegroundService : Service() {
         }
 
         createChannel()
+        createMessageChannel()
 
         startForeground(
             NOTIFICATION_ID,
@@ -446,6 +449,31 @@ class MeshForegroundService : Service() {
             }
         }
         sendBroadcast(intent)
+        showIncomingMessageNotification(text)
+    }
+
+    private fun showIncomingMessageNotification(text: String) {
+        val open = PendingIntent.getActivity(
+            this,
+            MESSAGE_NOTIFICATION_ID,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val builder = NotificationCompat.Builder(this, MESSAGE_CHANNEL_ID)
+            .setSmallIcon(
+                if (meshEnabled) R.drawable.ic_mesh_notification_active
+                else R.drawable.ic_mesh_notification
+            )
+            .setContentTitle("Новое сообщение")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .setContentIntent(open)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        getSystemService(NotificationManager::class.java).notify(
+            MESSAGE_NOTIFICATION_ID,
+            builder.build()
+        )
     }
 
     private fun stopMesh() {
@@ -478,6 +506,27 @@ class MeshForegroundService : Service() {
             getSystemService(
                 NotificationManager::class.java
             ).createNotificationChannel(channel)
+        }
+    }
+
+    private fun createMessageChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                MESSAGE_CHANNEL_ID,
+                "Новые сообщения",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Уведомления о новых сообщениях"
+                setSound(
+                    android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION),
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+            }
+            getSystemService(NotificationManager::class.java)
+                .createNotificationChannel(channel)
         }
     }
 
