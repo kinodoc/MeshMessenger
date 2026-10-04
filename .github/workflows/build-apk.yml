@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
   push:
     branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
 
 jobs:
   build:
@@ -36,6 +38,9 @@ jobs:
           chmod +x ./gradlew
           ./gradlew --version >/dev/null 2>&1 || true
           find "$HOME/.gradle/wrapper/dists" -type f -path "*/bin/gradle" -exec chmod +x {} +
+
+      - name: Run mesh regression tests
+        run: ./gradlew --no-daemon :app:testDebugUnitTest
 
       - name: Decode signing key
         env:
