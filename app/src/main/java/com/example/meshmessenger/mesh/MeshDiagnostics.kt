@@ -26,7 +26,13 @@ class MeshDiagnostics(context: Context) {
             "connected", "enabled", "httpStatus", "bytes", "stage", "operation",
             "serviceState", "component", "method", "line", "ble_ready", "relay_ready",
             "nodeReady", "nodeHealthy", "relayReady", "messageType", "status", "count",
-            "timeoutMs", "mtu", "gattStatus", "profile", "permission", "available"
+            "timeoutMs", "mtu", "gattStatus", "profile", "permission", "available",
+            "rssi", "batteryPct", "charging", "networkType", "permissionState", "bleState",
+            "relayState", "lastSeenAgeMs", "queueAgeMs", "packetBytes", "failureCount",
+            "foreground", "dozeMode", "bluetoothState", "gattOperation", "retryDelayMs",
+            "threadState", "scanState", "advertisingState", "connectionState", "deliveryState",
+            "ackState", "routeState", "transportState", "httpMethod", "tlsStatus", "dnsStatus",
+            "storageState", "batteryOptimized", "processState", "elapsedMs", "eventCount"
         )
         private val safeValue = Regex("[A-Za-z][A-Za-z0-9_.$:/+-]{0,79}|[0-9]{1,8}")
         private val privateIdentifier = Regex(
