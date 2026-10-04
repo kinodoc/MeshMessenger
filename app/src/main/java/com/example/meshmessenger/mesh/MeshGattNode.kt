@@ -271,8 +271,8 @@ class MeshGattNode(
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     peers[device.address] = g
                     onPeerCountChanged(peerCount())
-                    g.requestMtu(247)
-                    g.discoverServices()
+                    val mtuRequested = runCatching { g.requestMtu(247) }.getOrDefault(false)
+                    onDiagnostic("BLE_GATT_SETUP", "connected mtu_request=$mtuRequested discover_services=${runCatching { g.discoverServices() }.getOrDefault(false)}")
                 } else {
                     peers.remove(device.address)
                     connecting.remove(device.address)
@@ -290,8 +290,12 @@ class MeshGattNode(
                     g.close()
                 }
             }
-            override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) { g.discoverServices() }
+            override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+                onDiagnostic("BLE_GATT_MTU", "mtu=$mtu,status=$status")
+                onDiagnostic("BLE_GATT_SETUP", "discover_services=${runCatching { g.discoverServices() }.getOrDefault(false)}")
+            }
             override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+                onDiagnostic("BLE_GATT_SERVICES", "status=$status,mesh_service=${g.getService(service) != null}")
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     onStatus("BLE: ошибка обнаружения сервисов $status")
                     g.disconnect()
@@ -320,10 +324,16 @@ class MeshGattNode(
                 flushQueue()
             }
             override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-                if (descriptor.uuid == cccd && status == BluetoothGatt.GATT_SUCCESS) {
+                if (descriptor.uuid != cccd) return
+                onDiagnostic("BLE_GATT_NOTIFY", "descriptor_status=$status")
+                if (status == BluetoothGatt.GATT_SUCCESS) {
                     notifyReady.add(device.address)
+                    onDiagnostic("BLE_GATT_READY", "notifications_enabled")
                     writeHello(g)
                     flushQueue()
+                } else {
+                    onStatus("BLE: не удалось включить уведомления ($status)")
+                    g.disconnect()
                 }
             }
             override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
