@@ -453,31 +453,9 @@ class MainActivity : ComponentActivity() {
                         result.text = "Отправляем отчёт на защищённый сервер…"
                         Thread {
                             val upload = runCatching {
-                                val connection = URL("https://194.87.186.159/api/bugreports").openConnection() as HttpURLConnection
-                                try {
-                                    connection.requestMethod = "POST"
-                                    connection.connectTimeout = 10000
-                                    connection.readTimeout = 20000
-                                    connection.doOutput = true
-                                    connection.setRequestProperty("Content-Type", "application/zip")
-                                    connection.setRequestProperty("X-Mesh-Version", BuildConfig.VERSION_NAME)
-                                    connection.setFixedLengthStreamingMode(report.length().toInt())
-                                    connection.outputStream.use { output -> report.inputStream().use { it.copyTo(output) } }
-                                    val code = connection.responseCode
-                                    val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-                                    val payload = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-                                    val json = JSONObject(payload)
-                                    if (code !in 200..299 || !json.optBoolean("ok", false)) {
-                                        throw IllegalStateException(when (json.optString("error")) {
-                                            "rate_limited" -> "Слишком много отчётов. Попробуй позже."
-                                            "service_not_configured", "upstream_unavailable" -> "Сервер временно недоступен."
-                                            "invalid_zip", "invalid_upload_size" -> "Архив не прошёл проверку."
-                                            else -> "Сервер не принял отчёт (код $code)."
-                                        })
-                                    }
-                                    if (json.optBoolean("duplicate", false)) "Такой баг уже зарегистрирован" else "Багрепорт отправлен"
-                                } finally {
-                                    connection.disconnect()
+                                when (MeshBugReportUploader.upload(report)) {
+                                    "duplicate" -> "Такой баг уже зарегистрирован"
+                                    else -> "Багрепорт отправлен"
                                 }
                             }
                             runOnUiThread {
