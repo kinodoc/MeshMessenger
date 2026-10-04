@@ -16,7 +16,7 @@ import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
-/** Creates a privacy-filtered diagnostic archive with the same schema for manual and automatic reports. */
+/** Creates one privacy-filtered diagnostic archive schema for manual and automatic reports. */
 object MeshBugReport {
     fun create(
         context: Context,
@@ -33,10 +33,9 @@ object MeshBugReport {
             appendLine("MeshMessenger bugreport")
             appendLine("version=${com.example.meshmessenger.BuildConfig.VERSION_NAME}")
             appendLine("versionCode=${com.example.meshmessenger.BuildConfig.VERSION_CODE}")
-            appendLine("android=${Build.VERSION.RELEASE}")
+            appendLine("android=${safeMeta(Build.VERSION.RELEASE ?: "unknown", 40)}")
             appendLine("api=${Build.VERSION.SDK_INT}")
-            appendLine("deviceManufacturer=${safeMeta(Build.MANUFACTURER, 80)}")
-            appendLine("deviceModel=${safeMeta(Build.MODEL, 100)}")
+            // Avoid hardware identifiers and model/manufacturer fingerprinting.
             appendLine("supportedAbis=${Build.SUPPORTED_ABIS.take(4).joinToString(",").let { safeMeta(it, 160) }}")
             appendLine("bluetoothEnabled=${runCatching {
                 val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
