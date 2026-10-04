@@ -60,6 +60,7 @@ class MainActivity : ComponentActivity() {
     private var selected: ContactStore.Contact? = null
     private var pendingQrField: EditText? = null
     private var meshActive = false
+    private var transportMode = "BOTH"
     private var meshActionPending = false
     private var pendingMeshTargetActive = false
     private lateinit var meshButton: Button
@@ -125,6 +126,7 @@ class MainActivity : ComponentActivity() {
         contacts = ContactStore(this)
         chats = ChatStore(this)
         pendingOutbox = PendingMessageStore(this)
+        transportMode = getSharedPreferences("mesh_runtime", MODE_PRIVATE).getString("transport_mode", "BOTH") ?: "BOTH"
         updater = UpdateManager(this)
         // log must exist before buildHome(): setting the network switch can invoke its listener.
         log = TextView(this)
@@ -367,6 +369,65 @@ class MainActivity : ComponentActivity() {
         }
         root.addView(peerStatus)
 
+        root.addView(homeText("РЕЖИМ ПЕРЕДАЧИ", 13f).apply {
+            setPadding(dp(2), dp(4), dp(2), dp(2))
+        })
+        val modeRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(0xFF081824.toInt())
+                setStroke(dp(1), 0xFF087E99.toInt())
+            }
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52)).apply {
+                setMargins(0, dp(2), 0, dp(8))
+            }
+        }
+        val modeButtons = linkedMapOf<String, Button>()
+        fun renderModeButtons() {
+            modeButtons.forEach { (mode, button) ->
+                val active = transportMode == mode
+                button.background = android.graphics.drawable.GradientDrawable().apply {
+                    cornerRadius = dp(9).toFloat()
+                    setColor(if (active) 0xFF087E99.toInt() else 0x00000000)
+                }
+                button.setTextColor(if (active) Color.WHITE else Color.rgb(105, 210, 255))
+            }
+        }
+        listOf("BLE" to "BLE", "BOTH" to "BLE + RELAY", "RELAY" to "RELAY").forEach { (mode, label) ->
+            val button = Button(this).apply {
+                text = label
+                textSize = 11f
+                isAllCaps = false
+                minHeight = dp(42)
+                minWidth = 0
+                setPadding(dp(3), 0, dp(3), 0)
+                layoutParams = LinearLayout.LayoutParams(0, dp(42), 1f).apply {
+                    setMargins(dp(2), 0, dp(2), 0)
+                }
+                setOnClickListener {
+                    if (transportMode == mode) return@setOnClickListener
+                    transportMode = mode
+                    getSharedPreferences("mesh_runtime", MODE_PRIVATE).edit().putString("transport_mode", mode).apply()
+                    renderModeButtons()
+                    if (mode != "RELAY" && !hasBluetoothRuntimePermissions()) {
+                        requestMeshPermissions()
+                    } else {
+                        startService(Intent(this@MainActivity, MeshForegroundService::class.java).apply {
+                            action = MeshForegroundService.ACTION_SET_MODE
+                            putExtra(MeshForegroundService.EXTRA_TRANSPORT_MODE, mode)
+                        })
+                    }
+                    log.text = "Режим передачи: $label"
+                }
+            }
+            modeButtons[mode] = button
+            modeRow.addView(button)
+        }
+        renderModeButtons()
+        root.addView(modeRow)
 
         meshButton = actionButton(
             if (meshActive) "ОСТАНОВИТЬ MESH" else "ЗАПУСТИТЬ MESH",
