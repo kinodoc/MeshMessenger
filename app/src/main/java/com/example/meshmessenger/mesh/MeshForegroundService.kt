@@ -193,7 +193,7 @@ class MeshForegroundService : Service() {
                             diagnostics.event("MESSAGE_SEND_FAILED", "transport=mesh,packet_bytes=${encoded.size},error_kind=decode_failed")
                         } else {
                             // Record only the packet type/size and transport availability, never IDs or payload.
-                            diagnostics.event("MESSAGE_SEND_DECODED", "transport=mesh,packet_bytes=${encoded.size},packet_type=${packet.type}")
+                            diagnostics.event("MESSAGE_SEND_DECODED", "transport=mesh,packet_bytes=${encoded.size},code=${packet.ttl}")
                             if (node != null) {
                                 runCatching { node?.send(packet) }
                                     .onSuccess { diagnostics.event("MESSAGE_SEND_ATTEMPT", "transport=ble,delivery_result=queued") }
