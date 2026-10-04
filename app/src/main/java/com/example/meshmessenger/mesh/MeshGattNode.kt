@@ -271,8 +271,16 @@ class MeshGattNode(
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     peers[device.address] = g
                     onPeerCountChanged(peerCount())
+                    // Android GATT operations must be serialized. Do not call
+                    // discoverServices() while requestMtu() may still be in flight:
+                    // overlapping operations can silently stall service discovery on
+                    // some OEM Bluetooth stacks (including Android 11 devices).
                     val mtuRequested = runCatching { g.requestMtu(247) }.getOrDefault(false)
-                    onDiagnostic("BLE_GATT_SETUP", "connected mtu_request=$mtuRequested discover_services=${runCatching { g.discoverServices() }.getOrDefault(false)}")
+                    onDiagnostic("BLE_GATT_SETUP", "connected mtu_request=$mtuRequested")
+                    if (!mtuRequested) {
+                        val discoveryStarted = runCatching { g.discoverServices() }.getOrDefault(false)
+                        onDiagnostic("BLE_GATT_SETUP", "mtu_request_unavailable discover_services=$discoveryStarted")
+                    }
                 } else {
                     peers.remove(device.address)
                     connecting.remove(device.address)
@@ -292,7 +300,14 @@ class MeshGattNode(
             }
             override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
                 onDiagnostic("BLE_GATT_MTU", "mtu=$mtu,status=$status")
-                onDiagnostic("BLE_GATT_SETUP", "discover_services=${runCatching { g.discoverServices() }.getOrDefault(false)}")
+                // Continue the GATT setup sequence only after the MTU operation
+                // has completed. Even a failed MTU negotiation still permits
+                // service discovery using the default MTU.
+                val discoveryStarted = runCatching { g.discoverServices() }.getOrDefault(false)
+                onDiagnostic("BLE_GATT_SETUP", "after_mtu discover_services=$discoveryStarted")
+                if (!discoveryStarted) {
+                    onStatus("BLE: не удалось запустить обнаружение GATT-сервисов")
+                }
             }
             override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
                 onDiagnostic("BLE_GATT_SERVICES", "status=$status,mesh_service=${g.getService(service) != null}")
