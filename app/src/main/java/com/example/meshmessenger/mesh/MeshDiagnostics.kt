@@ -8,18 +8,36 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** Local technical diagnostics with a privacy filter applied before export. */
+/**
+ * Privacy-preserving technical event log. Callers should pass only enum-like values,
+ * counts, durations and numeric error codes; arbitrary text is discarded by the allowlist.
+ */
 class MeshDiagnostics(context: Context) {
     companion object {
         private const val FILE_NAME = "mesh_diagnostics.log"
-        private const val MAX_LINES = 800
-        private const val MAX_FILE_BYTES = 128 * 1024L
-        private val sensitiveField = Regex(
-            "(?i)(\\b(?:chat(?:Text)?|message(?:Text)?|text|payload|content|contact(?:Name|Id)?|" +
-                "peerName|displayName|name|privateKey|publicKey|key|token|secret|password|authorization|" +
-                "email|phone|address|ip|mac|bluetoothAddress)\\s*[=:]\\s*)[^,;|\\s]+"
+        private const val MAX_LINES = 1200
+        private const val MAX_FILE_BYTES = 192 * 1024L
+        private val SAFE_KEYS = setOf(
+            "stage", "state", "result", "reason", "error", "code", "status",
+            "transport", "operation", "attempt", "retry", "count", "queue",
+            "duration_ms", "elapsed_ms", "connected", "enabled", "permission",
+            "mtu", "bytes", "service", "exception", "component", "event", "phase",
+            "direction", "packet_type", "route_state", "hop_count", "peer_count",
+            "neighbor_count", "queue_depth", "dropped_count", "timeout_ms", "latency_ms",
+            "http_status", "failure_kind", "scan_state", "advertise_state",
+            "connection_state", "delivery_state", "ack_state", "retry_count",
+            "foreground", "battery_optimization", "network_type", "validated",
+            "ble", "profile", "message_stage", "delivery_result", "error_kind",
+            "retry_reason", "disconnect_reason", "permission_state", "adapter_state",
+            "node_state", "relay_state", "operation_result", "queue_wait_ms",
+            "packet_bytes", "service_state", "failure_stage", "startup_stage",
+            "gatt_status", "gatt_operation", "scan_result", "advertising_mode",
+            "disconnect_status", "protocol_version", "socket_state", "queue_age_ms",
+            "ack_timeout_ms", "packet_ttl", "route_hops", "restart_count",
+            "last_success_age_ms", "storage_state", "permission_name", "rssi",
+            "bond_state", "profile_state", "connect_attempt", "operation_count"
         )
-        private val sensitiveAssignment = Regex("(?i)\\b(?:bearer\\s+)[A-Za-z0-9._~+/-]+=*")
+        private val SAFE_VALUE = Regex("^[A-Za-z0-9_.$:/-]{1,160}$")
     }
 
     private val file = File(context.filesDir, FILE_NAME)
@@ -27,8 +45,9 @@ class MeshDiagnostics(context: Context) {
     private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
 
     fun event(type: String, detail: String = "") {
-        val safeType = type.replace(Regex("[\\r\\n|]"), " ").take(80)
-        val safeDetail = redact(detail).replace(Regex("[\\r\\n|]"), " ").take(500)
+        val safeType = type.filter { it.isLetterOrDigit() || it in "._-" }
+            .take(80).ifBlank { "EVENT" }
+        val safeDetail = sanitizeDetails(detail)
         val line = buildString {
             append(formatter.format(Date()))
             append("|v=").append(BuildConfig.VERSION_NAME)
@@ -45,32 +64,57 @@ class MeshDiagnostics(context: Context) {
         }
     }
 
-    /** Manual and automatic reports share the same sanitized diagnostic history. */
+    /** Same allowlisted event history is used by manual and automatic reports. */
     fun readForUpload(): String = read().lineSequence().mapNotNull { line ->
         val fields = line.split('|', limit = 5)
-        if (fields.size >= 4) redact(fields.joinToString("|")) else null
-    }.joinToString("\n")
+        if (fields.size < 4) return@mapNotNull null
+        val timestamp = fields[0].takeIf {
+            it.matches(Regex("^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3}$"))
+        } ?: return@mapNotNull null
+        val version = fields[1].takeIf { it.matches(Regex("^v=[A-Za-z0-9._+-]{1,40}$")) }
+            ?: return@mapNotNull null
+        val api = fields[2].takeIf { it.matches(Regex("^api=\\d{1,3}$")) }
+            ?: return@mapNotNull null
+        val type = fields[3].filter { it.isLetterOrDigit() || it in "._-" }
+            .take(80).ifBlank { "EVENT" }
+        val details = if (fields.size == 5) sanitizeDetails(fields[4]) else ""
+        listOf(timestamp, version, api, type, details)
+            .filterIndexed { index, value -> index < 4 || value.isNotBlank() }
+            .joinToString("|")
+    }.takeLast(MAX_LINES).joinToString("\n")
 
     fun crash(thread: Thread, throwable: Throwable) {
-        event("CRASH", "thread=" + thread.name + " error=" + throwable.javaClass.simpleName)
-        event("CRASH_STACK", throwable.stackTrace.take(40).joinToString(" <- ") { it.toString() })
-    }
-
-    fun read(): String {
-        synchronized(lock) {
-            return runCatching { file.readText(Charsets.UTF_8) }.getOrDefault("")
+        // Do not record thread names or exception messages; both can contain arbitrary text.
+        event("CRASH", "exception=" + throwable.javaClass.simpleName.filter { it.isLetterOrDigit() || it == '_' }.take(80))
+        throwable.stackTrace.take(40).forEach { frame ->
+            val component = frame.className.filter { it.isLetterOrDigit() || it in "._$" }.take(120).ifBlank { "unknown" }
+            val operation = frame.methodName.filter { it.isLetterOrDigit() || it in "_$" }.take(80).ifBlank { "unknown" }
+            event("CRASH_FRAME", "component=$component,operation=$operation,code=${frame.lineNumber.coerceAtLeast(0)}")
         }
     }
 
-    private fun redact(value: String): String {
-        val masked = sensitiveField.replace(value) { match -> match.groupValues[1] + "[redacted]" }
-        return sensitiveAssignment.replace(masked, "Bearer [redacted]")
-            .replace(Regex("(?i)-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----", RegexOption.DOT_MATCHES_ALL), "[private-key-redacted]")
+    fun read(): String = synchronized(lock) {
+        runCatching { file.readText(Charsets.UTF_8) }.getOrDefault("")
     }
+
+    private fun sanitizeDetails(raw: String): String =
+        raw.split('|', ',', ';', ' ')
+            .mapNotNull { token ->
+                val pair = token.split('=', limit = 2)
+                if (pair.size != 2) return@mapNotNull null
+                val key = pair[0].lowercase(Locale.US)
+                val value = pair[1]
+                if (key !in SAFE_KEYS || !SAFE_VALUE.matches(value)) return@mapNotNull null
+                "$key=$value"
+            }
+            .distinct()
+            .take(30)
+            .joinToString(",")
+            .take(900)
 
     private fun trimIfNeeded() {
         if (!file.exists() || file.length() <= MAX_FILE_BYTES) return
-        val lines = file.readLines(Charsets.UTF_8)
-        file.writeText(lines.takeLast(MAX_LINES).joinToString("\n") + "\n", Charsets.UTF_8)
+        val kept = file.readLines(Charsets.UTF_8).takeLast(MAX_LINES)
+        file.writeText(kept.joinToString("\n") + "\n", Charsets.UTF_8)
     }
 }
