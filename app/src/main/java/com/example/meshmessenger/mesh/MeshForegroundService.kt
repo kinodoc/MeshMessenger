@@ -71,6 +71,7 @@ class MeshForegroundService : Service() {
 
     private val retryHandler = Handler(Looper.getMainLooper())
     private val autoBugReportInProgress = AtomicBoolean(false)
+    @Volatile private var serviceDestroyed = false
 
     private fun hasValidatedNetwork(): Boolean = runCatching {
         val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -82,6 +83,7 @@ class MeshForegroundService : Service() {
 
     private val autoBugReportRunnable = object : Runnable {
         override fun run() {
+            if (serviceDestroyed) return
             if (!hasValidatedNetwork()) {
                 diagnostics.event("BUGREPORT_AUTO_DEFERRED", "reason=no_validated_network")
                 retryHandler.postDelayed(this, AUTO_BUGREPORT_OFFLINE_RETRY_MS)
@@ -103,7 +105,7 @@ class MeshForegroundService : Service() {
                     android.util.Log.w("MeshMessenger", "Automatic bug report upload failed", error)
                 } finally {
                     autoBugReportInProgress.set(false)
-                    retryHandler.postDelayed(autoBugReportRunnable, AUTO_BUGREPORT_INTERVAL_MS)
+                    if (!serviceDestroyed) retryHandler.postDelayed(autoBugReportRunnable, AUTO_BUGREPORT_INTERVAL_MS)
                 }
             }.start()
         }
@@ -508,6 +510,7 @@ class MeshForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        serviceDestroyed = true
         retryHandler.removeCallbacks(autoBugReportRunnable)
         retryHandler.removeCallbacks(watchdogRunnable)
         retryHandler.removeCallbacks(retryRunnable)
