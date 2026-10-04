@@ -480,6 +480,7 @@ class MeshForegroundService : Service() {
     }
 
     private fun sendPeerStatus() {
+        diagnostics.event("PEER_STATUS", "ble=$blePeerCount,relay=$relayPeerCount")
         val intent = Intent(ACTION_PEER_STATUS).apply {
             setPackage(packageName)
             putExtra(EXTRA_BLE_COUNT, blePeerCount)
