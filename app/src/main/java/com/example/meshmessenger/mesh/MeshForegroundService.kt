@@ -180,18 +180,37 @@ class MeshForegroundService : Service() {
 
             ACTION_SEND_MESH -> {
                 val encoded = intent.getByteArrayExtra(EXTRA_PACKET)
-                android.util.Log.d("MeshGattDiag", "service_send_mesh bytes=${encoded?.size ?: 0} nodeReady=${node != null}")
-                if (encoded != null) {
+                diagnostics.event(
+                    "MESSAGE_SEND_REQUEST",
+                    "transport=mesh,packet_bytes=${encoded?.size ?: 0},node_state=${if (node?.isHealthy() == true) "ready" else "not_ready"},relay_state=${if (relayTransport != null) "ready" else "not_ready"}"
+                )
+                if (encoded == null) {
+                    diagnostics.event("MESSAGE_SEND_FAILED", "transport=mesh,error_kind=missing_packet")
+                } else {
                     runCatching {
                         val packet = MeshPacket.decode(encoded)
-                        if (packet != null) {
-                            android.util.Log.d("MeshGattDiag", "service_packet_decoded id=${packet.messageId} src=${packet.sourceId.take(8)} dst=${packet.destinationId.take(8)}")
-                            node?.send(packet)
-                            relayTransport?.send(packet)
+                        if (packet == null) {
+                            diagnostics.event("MESSAGE_SEND_FAILED", "transport=mesh,packet_bytes=${encoded.size},error_kind=decode_failed")
                         } else {
-                            android.util.Log.w("MeshGattDiag", "service_packet_decode_failed bytes=${encoded.size}")
+                            // Record only the packet type/size and transport availability, never IDs or payload.
+                            diagnostics.event("MESSAGE_SEND_DECODED", "transport=mesh,packet_bytes=${encoded.size},packet_type=${packet.type}")
+                            if (node != null) {
+                                runCatching { node?.send(packet) }
+                                    .onSuccess { diagnostics.event("MESSAGE_SEND_ATTEMPT", "transport=ble,delivery_result=queued") }
+                                    .onFailure { diagnostics.event("MESSAGE_SEND_FAILED", "transport=ble,error_kind=send_exception") }
+                            } else {
+                                diagnostics.event("MESSAGE_SEND_SKIPPED", "transport=ble,error_kind=node_unavailable")
+                            }
+                            if (relayTransport != null) {
+                                runCatching { relayTransport?.send(packet) }
+                                    .onSuccess { diagnostics.event("MESSAGE_SEND_ATTEMPT", "transport=relay,delivery_result=queued") }
+                                    .onFailure { diagnostics.event("MESSAGE_SEND_FAILED", "transport=relay,error_kind=send_exception") }
+                            } else {
+                                diagnostics.event("MESSAGE_SEND_SKIPPED", "transport=relay,error_kind=transport_unavailable")
+                            }
                         }
                     }.onFailure {
+                        diagnostics.event("MESSAGE_SEND_FAILED", "transport=mesh,error_kind=processing_exception")
                         updateNotification("Ошибка отправки Mesh-пакета")
                     }
                 }
