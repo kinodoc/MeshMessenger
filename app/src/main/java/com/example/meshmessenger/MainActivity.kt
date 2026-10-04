@@ -1074,11 +1074,12 @@ class MainActivity : ComponentActivity() {
             val relayPeers = intent.getIntExtra(MeshForegroundService.EXTRA_RELAY_COUNT, 0)
             val bluetoothIcon = if (ble > 0) R.drawable.ic_bluetooth_mesh else 0
             val relayIcon = if (relayPeers > 0) R.drawable.ic_relay_radio else 0
+            // These counters represent connected peers, not whether a transport is available.
             peerStatus.text = when {
-                ble > 0 && relayPeers > 0 -> "КАНАЛЫ  BLE  +  RELAY"
-                ble > 0 -> "КАНАЛ  BLE"
-                relayPeers > 0 -> "КАНАЛ  RELAY"
-                else -> "КАНАЛЫ НЕ ПОДКЛЮЧЕНЫ"
+                ble > 0 && relayPeers > 0 -> "УЗЛЫ: BLE $ble • RELAY $relayPeers"
+                ble > 0 -> "УЗЛЫ BLE: $ble • RELAY: 0"
+                relayPeers > 0 -> "УЗЛЫ BLE: 0 • RELAY: $relayPeers"
+                else -> "НЕТ СОЕДИНЁННЫХ УЗЛОВ"
             }
             peerStatus.setCompoundDrawablesWithIntrinsicBounds(bluetoothIcon, 0, relayIcon, 0)
         }
