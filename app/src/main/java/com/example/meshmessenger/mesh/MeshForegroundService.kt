@@ -81,7 +81,7 @@ class MeshForegroundService : Service() {
             capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }.getOrDefault(false)
 
-    private val autoBugReportRunnable = object : Runnable {
+    private val autoBugReportRunnable: Runnable = object : Runnable {
         override fun run() {
             if (serviceDestroyed) return
             if (!hasValidatedNetwork()) {
