@@ -870,7 +870,6 @@ class MainActivity : ComponentActivity() {
 
     private fun contactsDialog() {
         val dialog = android.app.Dialog(this)
-        chatDialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(18, 12, 18, 12)
