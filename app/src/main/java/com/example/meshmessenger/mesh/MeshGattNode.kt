@@ -696,12 +696,12 @@ class MeshGattNode(
         l2capTransport.readyAddresses().isNotEmpty() ||
             gattReady.isNotEmpty() || blessedCentral.isReady()
 
-    /** True only when the GATT server, BLE advertiser and BLE scanner are all running. */
+    /** True when the core BLE/GATT transport is running. L2CAP is an optional
+     * optimization on API 29+ and must never make the GATT fallback unhealthy. */
     fun isHealthy(): Boolean = runCatching {
         adapter.isEnabled && gattServerReady && server != null &&
             advertisingStarted && advertiser != null &&
-            blessedCentral.isRunning() &&
-            (!l2capTransport.isSupported() || l2capTransport.psm > 0)
+            blessedCentral.isRunning()
     }.getOrDefault(false)
 
     fun stop() {
