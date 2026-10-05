@@ -68,7 +68,6 @@ class MainActivity : ComponentActivity() {
     private val meshActionTimeout = Runnable {
         val targetActive = pendingMeshTargetActive
         meshActionPending = false
-        meshActionHandler.removeCallbacks(meshActionTimeout)
         meshButton.isEnabled = true
 
         // A transport may initialize asynchronously, but the UI must never stay
