@@ -723,7 +723,21 @@ class MeshGattNode(
         if (!started) {
             writing.remove(address)
             onStatus("BLE: запись занята")
+            return
         }
+
+        writeTimeouts.remove(address)?.cancel(false)
+        writeTimeouts[address] = writeTimeoutExecutor.schedule({
+            if (!writing.remove(address)) return@schedule
+            onDiagnostic(
+                "BLE_GATT_WRITE_TIMEOUT",
+                "address=**" + address.takeLast(5) + ",timeout_ms=" + GATT_WRITE_TIMEOUT_MS
+            )
+            onStatus("BLE: запись зависла, переподключение")
+            writeQueues.remove(address)
+            notifyReady.remove(address)
+            runCatching { gatt.disconnect() }
+        }, GATT_WRITE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
     }
 
     @SuppressLint("MissingPermission")
