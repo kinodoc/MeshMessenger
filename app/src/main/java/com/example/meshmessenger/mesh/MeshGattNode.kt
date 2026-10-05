@@ -142,6 +142,26 @@ class MeshGattNode(
             override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     serverClients[device.address] = device
+                    onDiagnostic(
+                        "BLE_GATT_SERVER",
+                        "client_connected address=**" + device.address.takeLast(5) +
+                            " peers=" + peers.size + " ready=" + gattReady.size
+                    )
+                    // A peer can reach our GATT server before our scanner has
+                    // opened the reciprocal client connection. In that state
+                    // outgoing packets are queued but cannot use the server
+                    // connection until CCCD/notifications are negotiated.
+                    // Open the reciprocal GATT client connection directly from
+                    // the already-known BluetoothDevice so both directions get
+                    // a normal client/server path. Android's BLE API supports
+                    // connecting directly to the remote GATT server with
+                    // connectGatt(false,...).
+                    writeTimeoutExecutor.schedule({
+                        if (!peers.containsKey(device.address) && !connecting.contains(device.address)) {
+                            onDiagnostic("BLE_GATT_CONNECT", "reciprocal_from_server address=**" + device.address.takeLast(5))
+                            connect(device)
+                        }
+                    }, 300L, TimeUnit.MILLISECONDS)
                 } else {
                     serverClients.remove(device.address)
                     peerNodeIds.remove(device.address)
