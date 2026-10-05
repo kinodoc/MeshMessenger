@@ -162,8 +162,30 @@ class MeshGattNode(
                 }
             }
 
+            override fun onCharacteristicReadRequest(device: BluetoothDevice, requestId: Int, offset: Int, characteristic: BluetoothGattCharacteristic) {
+                if (characteristic.uuid == allocator) {
+                    val session = allocatorSessions[device.address]
+                    onDiagnostic("BLE_ALLOCATOR", "read address=**" + device.address.takeLast(5) + " allocated=" + (session != null))
+                    server?.sendResponse(device, requestId, if (session != null) BluetoothGatt.GATT_SUCCESS else BluetoothGatt.GATT_READ_NOT_PERMITTED, offset, session)
+                    return
+                }
+                server?.sendResponse(device, requestId, BluetoothGatt.GATT_READ_NOT_PERMITTED, offset, null)
+            }
+
             override fun onCharacteristicWriteRequest(device: BluetoothDevice, requestId: Int, characteristic: BluetoothGattCharacteristic, preparedWrite: Boolean, responseNeeded: Boolean, offset: Int, value: ByteArray) {
                 Log.d(TAG, "gatt_write_rx peer=${device.address.takeLast(5)} uuid=${characteristic.uuid} bytes=${value.size} prepared=$preparedWrite response=$responseNeeded offset=$offset prefix=${value.take(8).joinToString("") { "%02x".format(it) }}")
+                if (characteristic.uuid == allocator && value.size == 16) {
+                    val busy = allocatorSessions.keys.any { it != device.address }
+                    if (!busy) {
+                        allocatorSessions[device.address] = value.copyOf()
+                        onDiagnostic("BLE_ALLOCATOR", "session_allocated address=**" + device.address.takeLast(5))
+                        if (responseNeeded) server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
+                    } else if (responseNeeded) {
+                        onDiagnostic("BLE_ALLOCATOR", "session_rejected_busy address=**" + device.address.takeLast(5))
+                        server?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, 0, null)
+                    }
+                    return
+                }
                 if (characteristic.uuid == rx) handleIncomingFragment(device.address, value)
                 if (responseNeeded) server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
             }
@@ -178,6 +200,7 @@ class MeshGattNode(
             override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     serverClients[device.address] = device
+                    allocatorSessions.remove(device.address)
                     onDiagnostic(
                         "BLE_GATT_SERVER",
                         "client_connected address=**" + device.address.takeLast(5) +
@@ -189,6 +212,7 @@ class MeshGattNode(
                     onDiagnostic("BLE_GATT_SERVER", "waiting_for_hello address=**" + device.address.takeLast(5))
                 } else {
                     serverClients.remove(device.address)
+                    allocatorSessions.remove(device.address)
                     peerNodeIds.remove(device.address)
                     notifyReady.remove(device.address)
                     gattReady.remove(device.address)
