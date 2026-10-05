@@ -36,6 +36,7 @@ class MeshForegroundService : Service() {
         const val EXTRA_TRANSPORT_MODE = "transport_mode"
 	const val ACTION_SEND_MESH = "com.example.meshmessenger.SEND_MESH"
         const val EXTRA_PACKET = "packet"
+        const val ACTION_PROFILE_NAME_CHANGED = "com.example.meshmessenger.PROFILE_NAME_CHANGED"
 
         const val ACTION_RELAY_MESSAGE = "com.example.meshmessenger.RELAY_MESSAGE"
         const val ACTION_MESH_MESSAGE = "com.example.meshmessenger.MESH_MESSAGE"
