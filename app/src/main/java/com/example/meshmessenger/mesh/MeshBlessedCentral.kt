@@ -348,7 +348,10 @@ class MeshBlessedCentral(
     }
 
     fun markPeerHello(address: String) {
-        if (!connected.containsKey(address) || !helloWriteSucceeded.contains(address)) return
+        // A validated peer HELLO is the application-level proof that the link works.
+        // Some Android/OEM stacks report write_started=true but never deliver the
+        // local write-completion callback, even though the peer HELLO is received.
+        if (!connected.containsKey(address)) return
         if (ready.add(address)) {
             onDiagnostic("BLE_BLESSED_READY", "peer_hello=true address=**" + address.takeLast(5))
             onReady(address, true)
