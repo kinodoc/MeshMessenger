@@ -40,6 +40,9 @@ class MeshGattNode(
     private var advertiseCallback: AdvertiseCallback? = null
     private var scanner: BluetoothLeScanner? = null
     private var scanCallback: ScanCallback? = null
+    // Lightweight counters distinguish missing scan callbacks from a service UUID mismatch.
+    private var scanResultCount = 0
+    private var scanMatchCount = 0
     private val peers = mutableMapOf<String, BluetoothGatt>()
     private val serverClients = mutableMapOf<String, BluetoothDevice>()
     private val connecting = mutableSetOf<String>()
@@ -235,10 +238,23 @@ class MeshGattNode(
 
         scanCallback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
-                val record = result.scanRecord ?: return
-                val uuids = record.serviceUuids.orEmpty()
-                if (!uuids.any { it.uuid == service }) return
-                val advertisedNodeId = record.getServiceData(ParcelUuid(service))
+                scanResultCount++
+                val record = result.scanRecord
+                val uuids = record?.serviceUuids.orEmpty()
+                val matchesService = uuids.any { it.uuid == service }
+                if (matchesService) scanMatchCount++
+                // Aggregate periodically instead of logging every nearby device.
+                if (scanResultCount == 1 || scanResultCount % 25 == 0) {
+                    val serviceDataBytes = record?.getServiceData(ParcelUuid(service))?.size ?: 0
+                    onDiagnostic(
+                        "BLE_SCAN",
+                        "results=$scanResultCount matches=$scanMatchCount last_rssi=\${result.rssi} " +
+                            "uuid_count=\${uuids.size} service_uuid=$matchesService service_data_bytes=$serviceDataBytes"
+                    )
+                }
+                if (!matchesService) return
+                onDiagnostic("BLE_SCAN_MATCH", "rssi=\${result.rssi},address=**" + result.device.address.takeLast(5))
+                val advertisedNodeId = record?.getServiceData(ParcelUuid(service))
                     ?.joinToString("") { "%02x".format(it.toInt() and 0xff) }
                     ?.takeIf { it.length == 16 }
                 if (advertisedNodeId == localId) return
@@ -268,6 +284,11 @@ class MeshGattNode(
         val callback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
                 onDiagnostic("BLE_GATT_STATE", "address=**" + device.address.takeLast(5) + ",status=" + status + ",state=" + newState)
+                if (newState == BluetoothProfile.STATE_CONNECTED && status != BluetoothGatt.GATT_SUCCESS) {
+                    onDiagnostic("BLE_GATT_CONNECT", "connected_with_error status=$status; disconnecting")
+                    g.disconnect()
+                    return
+                }
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     peers[device.address] = g
                     onPeerCountChanged(peerCount())
@@ -331,10 +352,28 @@ class MeshGattNode(
                     g.disconnect()
                     return
                 }
-                g.setCharacteristicNotification(remoteTx, true)
-                val d = remoteTx.getDescriptor(cccd) ?: return
+                val notificationEnabled = runCatching {
+                    g.setCharacteristicNotification(remoteTx, true)
+                }.getOrDefault(false)
+                if (!notificationEnabled) {
+                    onDiagnostic("BLE_GATT_NOTIFY", "set_notification_failed")
+                    onStatus("BLE: не удалось включить локальные уведомления")
+                    g.disconnect()
+                    return
+                }
+                val d = remoteTx.getDescriptor(cccd) ?: run {
+                    onDiagnostic("BLE_GATT_NOTIFY", "cccd_missing")
+                    g.disconnect()
+                    return
+                }
                 d.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                g.writeDescriptor(d)
+                val descriptorWriteStarted = runCatching { g.writeDescriptor(d) }.getOrDefault(false)
+                onDiagnostic("BLE_GATT_NOTIFY", "cccd_write_started=$descriptorWriteStarted")
+                if (!descriptorWriteStarted) {
+                    onStatus("BLE: не удалось запустить включение уведомлений")
+                    g.disconnect()
+                    return
+                }
                 peers[device.address] = g
                 flushQueue()
             }
@@ -387,7 +426,12 @@ class MeshGattNode(
                 flushPeerQueue(address)
             }
         }
-        val gatt = runCatching { device.connectGatt(context, false, callback) }.getOrNull()
+        // The scan result is a BLE device; force LE transport rather than AUTO.
+        val gatt = runCatching {
+            device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+        }.onFailure {
+            onDiagnostic("BLE_GATT_CONNECT", "connectGatt_exception=" + it.javaClass.simpleName)
+        }.getOrNull()
         if (gatt == null) {
             connecting.remove(device.address)
             if (stableId.isNotBlank()) connectingNodeIds.remove(stableId)
