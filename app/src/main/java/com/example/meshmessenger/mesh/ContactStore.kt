@@ -29,6 +29,24 @@ class ContactStore(context: Context) {
     fun get(nodeId: String): Contact? =
         all().firstOrNull { it.nodeId == nodeId }
 
+    fun rename(nodeId: String, name: String): Boolean = synchronized(lock) {
+        val safeName = name.trim().ifBlank { nodeId.take(8) }
+        val list = load().toMutableList()
+        val index = list.indexOfFirst { it.nodeId == nodeId }
+        if (index < 0) return@synchronized false
+        list[index] = list[index].copy(name = safeName)
+        save(list)
+        true
+    }
+
+    fun delete(nodeId: String): Boolean = synchronized(lock) {
+        val list = load()
+        val filtered = list.filterNot { it.nodeId == nodeId }
+        if (filtered.size == list.size) return@synchronized false
+        save(filtered)
+        true
+    }
+
     private fun load(): List<Contact> {
         val a = runCatching {
             JSONArray(prefs.getString("items", "[]"))
