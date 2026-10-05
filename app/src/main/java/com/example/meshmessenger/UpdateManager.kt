@@ -7,6 +7,8 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import org.json.JSONObject
@@ -72,7 +74,7 @@ class UpdateManager(private val context: Context) {
         Thread {
             val result = runCatching { fetchLatestFromApi() }
                 .recoverCatching { fetchLatestFromGitHubPage() }
-            context.mainExecutor.execute { onResult(result) }
+            Handler(Looper.getMainLooper()).post { onResult(result) }
         }.start()
     }
 
@@ -158,8 +160,8 @@ class UpdateManager(private val context: Context) {
                 val file = File(dir, release.apkName)
                 connection.inputStream.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
                 connection.disconnect()
-                context.mainExecutor.execute { install(file) }
-            }.onFailure { error -> context.mainExecutor.execute { onError(error) } }
+                Handler(Looper.getMainLooper()).post { install(file) }
+            }.onFailure { error -> Handler(Looper.getMainLooper()).post { onError(error) } }
         }.start()
     }
 
