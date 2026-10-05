@@ -869,7 +869,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun contactsDialog() {
-        chatDialog = android.app.Dialog(this)
+        val dialog = android.app.Dialog(this)
         chatDialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1153,8 +1153,8 @@ class MainActivity : ComponentActivity() {
             addView(root, FrameLayout.LayoutParams(-1, -1))
         }
 
-        val dialog = android.app.Dialog(this)
-        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        chatDialog = android.app.Dialog(this)
+        chatDialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
         chatDialog.setContentView(chatFrame)
         chatDialog.setCanceledOnTouchOutside(false)
         chatDialog.setOnDismissListener {
