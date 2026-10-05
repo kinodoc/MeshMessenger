@@ -57,7 +57,10 @@ class MeshGattNode(
     // Presence is keyed by the stable Mesh Node ID, not by BLE address or GATT connection.
     // A phone may advertise many times and may rotate its BLE address; it is still one peer.
     private val peerLastSeenAt = ConcurrentHashMap<String, Long>()
+    // CCCD enabled is not the same as application-ready: HELLO must also complete.
     private val notifyReady = mutableSetOf<String>()
+    private val gattReady = mutableSetOf<String>()
+    private val reconnectBlockedUntil = ConcurrentHashMap<String, Long>()
     private val service = MeshProtocol.SERVICE_UUID
     private val rx = MeshProtocol.RX_UUID
     private val tx = MeshProtocol.TX_UUID
@@ -77,6 +80,7 @@ class MeshGattNode(
         private const val DELIVERY_RETRY_MS = 10_000L
         private const val GATT_WRITE_TIMEOUT_MS = 5_000L
         private const val PEER_PRESENCE_TTL_MS = 30_000L
+        private const val CONNECT_RETRY_COOLDOWN_MS = 5_000L
     }
 
     private data class Assembly(
@@ -135,6 +139,7 @@ class MeshGattNode(
                     serverClients.remove(device.address)
                     peerNodeIds.remove(device.address)
                     notifyReady.remove(device.address)
+                    gattReady.remove(device.address)
                     assemblies.remove(device.address)
                     notificationQueues.remove(device.address)
                     notifying.remove(device.address)
@@ -286,6 +291,9 @@ class MeshGattNode(
     fun connect(device: BluetoothDevice, advertisedNodeId: String? = null) {
         if (Build.VERSION.SDK_INT >= 31 && context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
         val stableId = advertisedNodeId?.trim().orEmpty()
+        val blockedUntil = reconnectBlockedUntil[device.address] ?: 0L
+        if (blockedUntil > System.currentTimeMillis()) return
+        if (blockedUntil != 0L) reconnectBlockedUntil.remove(device.address)
         if (device.address == adapter.address ||
             peers.containsKey(device.address) ||
             connecting.contains(device.address) ||
@@ -301,6 +309,7 @@ class MeshGattNode(
                     return
                 }
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    reconnectBlockedUntil.remove(device.address)
                     peers[device.address] = g
                     onPeerCountChanged(peerCount())
                     // Android GATT operations must be serialized. Do not call
@@ -315,6 +324,10 @@ class MeshGattNode(
                     }
                 } else {
                     peers.remove(device.address)
+                    if (status != BluetoothGatt.GATT_SUCCESS) {
+                        reconnectBlockedUntil[device.address] = System.currentTimeMillis() + CONNECT_RETRY_COOLDOWN_MS
+                        onDiagnostic("BLE_GATT_RETRY", "cooldown_ms=$CONNECT_RETRY_COOLDOWN_MS,status=$status")
+                    }
                     connecting.remove(device.address)
                     if (stableId.isNotBlank()) connectingNodeIds.remove(stableId)
                     peerNodeIds.remove(device.address)
@@ -395,9 +408,8 @@ class MeshGattNode(
                 onDiagnostic("BLE_GATT_NOTIFY", "descriptor_status=$status")
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     notifyReady.add(device.address)
-                    onDiagnostic("BLE_GATT_READY", "notifications_enabled")
+                    onDiagnostic("BLE_GATT_CCCD", "enabled")
                     writeHello(g)
-                    flushQueue()
                 } else {
                     onStatus("BLE: не удалось включить уведомления ($status)")
                     g.disconnect()
@@ -412,8 +424,17 @@ class MeshGattNode(
                 val address = device.address
                 if (helloWriting.remove(address)) {
                     helloWriteTimeouts.remove(address)?.cancel(false)
-                    if (status != BluetoothGatt.GATT_SUCCESS) onStatus("BLE: HELLO не отправлен")
-                    flushPeerQueue(address)
+                    if (status != BluetoothGatt.GATT_SUCCESS) {
+                        gattReady.remove(address)
+                        onDiagnostic("BLE_GATT_HELLO", "write_failed status=$status")
+                        onStatus("BLE: HELLO не отправлен")
+                        runCatching { g.disconnect() }
+                    } else {
+                        gattReady.add(address)
+                        onDiagnostic("BLE_GATT_HELLO", "write_success")
+                        onDiagnostic("BLE_GATT_READY", "ready=true")
+                        flushPeerQueue(address)
+                    }
                     return
                 }
                 writeTimeouts.remove(address)?.cancel(false)
@@ -452,8 +473,9 @@ class MeshGattNode(
             if (stableId.isNotBlank()) connectingNodeIds.remove(stableId)
             return
         }
-        peers[device.address] = gatt
-        onPeerCountChanged(peerCount())
+        // A BluetoothGatt object is not a connected peer until the callback confirms it.
+        // Do not let a pending connect trigger retry/queue logic.
+
     }
 
     @SuppressLint("MissingPermission")
@@ -492,6 +514,7 @@ class MeshGattNode(
             )
             onStatus("BLE: HELLO завис, переподключение")
             notifyReady.remove(address)
+            gattReady.remove(address)
             runCatching { gatt.disconnect() }
         }, GATT_WRITE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
     }
@@ -685,7 +708,8 @@ class MeshGattNode(
             }
         }
 
-        val ready = peers.filterKeys { notifyReady.contains(it) }.keys.toList()
+        // Application packets require the complete GATT setup and HELLO handshake.
+        val ready = peers.filterKeys { gattReady.contains(it) }.keys.toList()
         for (address in ready) {
             for (entry in entries) {
                 val waitingSince = awaitingDelivery[address]?.get(entry.id)
@@ -705,7 +729,7 @@ class MeshGattNode(
     private fun flushPeerQueue(address: String) {
         if (writing.contains(address)) return
         val gatt = peers[address] ?: return
-        if (!notifyReady.contains(address)) return
+        if (!gattReady.contains(address)) return
         val task = writeQueues[address]?.firstOrNull() ?: return
         val part = task.fragments.firstOrNull() ?: return
         val characteristic = gatt.getService(service)?.getCharacteristic(rx) ?: return
@@ -801,6 +825,9 @@ class MeshGattNode(
 
     fun onlinePeerCount(): Int = peerCount()
 
+    /** True when at least one central GATT connection completed the application handshake. */
+    fun isBleTransportReady(): Boolean = gattReady.isNotEmpty()
+
     /** True only when the GATT server, BLE advertiser and BLE scanner are all running. */
     fun isHealthy(): Boolean = runCatching {
         adapter.isEnabled && gattServerReady && server != null &&
@@ -844,6 +871,8 @@ class MeshGattNode(
         peerNodeIds.clear()
         peerLastSeenAt.clear()
         notifyReady.clear()
+        gattReady.clear()
+        reconnectBlockedUntil.clear()
         notificationQueues.clear()
         notifying.clear()
         awaitingDelivery.clear()
