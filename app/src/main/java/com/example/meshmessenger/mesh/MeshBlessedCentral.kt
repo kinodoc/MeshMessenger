@@ -25,6 +25,7 @@ class MeshBlessedCentral(
     private val helloPayload: () -> ByteArray,
     private val onDiagnostic: (String, String) -> Unit,
     private val onFragment: (String, ByteArray) -> Unit,
+    private val onL2capPeer: (BluetoothPeripheral, ScanResult, Int) -> Unit = { _, _, _ -> },
     private val onReady: (String, Boolean) -> Unit,
     private val onWrite: (String, Boolean) -> Unit
 ) {
@@ -209,8 +210,28 @@ class MeshBlessedCentral(
             override fun onDiscoveredPeripheral(peripheral: BluetoothPeripheral, scanResult: ScanResult) {
                 if (connected.containsKey(peripheral.address)) return
 
-                val advertisedNodeId = scanResult.scanRecord
+                val psmBytes = scanResult.scanRecord
                     ?.getServiceData(android.os.ParcelUuid(serviceUuid))
+                    ?.takeIf { it.size == 4 }
+                val advertisedPsm = psmBytes?.let {
+                    ((it[0].toInt() and 0xff) shl 24) or
+                        ((it[1].toInt() and 0xff) shl 16) or
+                        ((it[2].toInt() and 0xff) shl 8) or
+                        (it[3].toInt() and 0xff)
+                }?.takeIf { it > 0 }
+
+                if (advertisedPsm != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    onDiagnostic(
+                        "BLE_BLESSED_ARBITRATION",
+                        "l2cap_psm=$advertisedPsm address=**" + peripheral.address.takeLast(5)
+                    )
+                    central.stopScan()
+                    onL2capPeer(peripheral, scanResult, advertisedPsm)
+                    return
+                }
+
+                val advertisedNodeId = scanResult.scanRecord
+                    ?.getManufacturerSpecificData(0xFFFF)
                     ?.joinToString("") { "%02x".format(it.toInt() and 0xff) }
                     ?.takeIf { it.length == 16 }
 
