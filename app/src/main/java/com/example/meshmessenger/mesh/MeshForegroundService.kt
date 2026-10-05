@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class MeshForegroundService : Service() {
     companion object {
         private const val CHANNEL_ID = "mesh_runtime"
+        private const val INCOMING_CHANNEL_ID = "incoming_messages_v1"
         private const val NOTIFICATION_ID = 1001
 
         const val ACTION_APP_START = "com.example.meshmessenger.APP_START"
@@ -431,11 +432,15 @@ class MeshForegroundService : Service() {
         packetId: String?,
         action: String
     ) {
-        chats.addIncomingIfAbsent(
+        val isNewMessage = chats.addIncomingIfAbsent(
             sourceId,
             text,
             packetId.orEmpty()
         )
+
+        if (isNewMessage) {
+            showIncomingMessageNotification(text, sourceId, packetId)
+        }
 
         val intent = Intent(action).apply {
             setPackage(packageName)
@@ -479,9 +484,27 @@ class MeshForegroundService : Service() {
 
             channel.description = "Фоновая работа mesh-сети"
 
-            getSystemService(
-                NotificationManager::class.java
-            ).createNotificationChannel(channel)
+            val incomingChannel = NotificationChannel(
+                INCOMING_CHANNEL_ID,
+                "Входящие сообщения",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Уведомления о новых сообщениях"
+                setSound(
+                    android.net.Uri.parse(
+                        "android.resource://$packageName/${R.raw.mesh_messenger_tron_notification}"
+                    ),
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+            }
+
+            getSystemService(NotificationManager::class.java).apply {
+                createNotificationChannel(channel)
+                createNotificationChannel(incomingChannel)
+            }
         }
     }
 
@@ -507,6 +530,39 @@ class MeshForegroundService : Service() {
             .setOngoing(true)
             .setContentIntent(open)
             .build()
+    }
+
+    private fun showIncomingMessageNotification(
+        text: String,
+        sourceId: String,
+        packetId: String?
+    ) {
+        val open = PendingIntent.getActivity(
+            this,
+            1,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notificationId = 10_000 + ((packetId ?: "$sourceId:$text").hashCode() and 0x7FFF_FFFF) % 90_000
+
+        val builder = NotificationCompat.Builder(this, INCOMING_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_mesh_notification_active)
+            .setContentTitle("Новое сообщение")
+            .setContentText(text)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+
+        if (Build.VERSION.SDK_INT < 26) {
+            builder.setSound(
+                android.net.Uri.parse(
+                    "android.resource://$packageName/${R.raw.mesh_messenger_tron_notification}"
+                )
+            )
+        }
+
+        getSystemService(NotificationManager::class.java).notify(notificationId, builder.build())
     }
 
     private fun sendPeerStatus() {

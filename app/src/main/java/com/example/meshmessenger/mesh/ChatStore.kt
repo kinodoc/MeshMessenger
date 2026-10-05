@@ -55,14 +55,14 @@ class ChatStore(context: Context) {
         peerId: String,
         text: String,
         packetId: String
-    ) = synchronized(lock) {
+    ): Boolean = synchronized(lock) {
         if (packetId.isBlank()) {
             add(peerId, text, false)
-            return@synchronized
+            return@synchronized true
         }
 
         val a = load().toMutableList()
-        if (a.any { it.packetId == packetId }) return@synchronized
+        if (a.any { it.packetId == packetId }) return@synchronized false
 
         a.add(
             Message(
@@ -78,6 +78,7 @@ class ChatStore(context: Context) {
 
         while (a.size > 2000) a.removeAt(0)
         save(a)
+        true
     }
 
     fun messages(peerId: String): List<Message> =
