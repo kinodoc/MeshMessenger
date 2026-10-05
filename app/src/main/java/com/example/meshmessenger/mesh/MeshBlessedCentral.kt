@@ -17,6 +17,7 @@ import java.util.UUID
 /** BLESSED-based BLE central: serialized scan/connect/GATT operations. */
 class MeshBlessedCentral(
     context: Context,
+    private val localId: String,
     private val serviceUuid: UUID,
     private val rxUuid: UUID,
     private val txUuid: UUID,
