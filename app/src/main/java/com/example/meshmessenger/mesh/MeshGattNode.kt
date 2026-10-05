@@ -55,10 +55,13 @@ class MeshGattNode(
     private val service = MeshProtocol.SERVICE_UUID
     private val rx = MeshProtocol.RX_UUID
     private val tx = MeshProtocol.TX_UUID
+    private val allocator = MeshProtocol.ALLOCATOR_UUID
     private val cccd = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     private val rxCharacteristic = BluetoothGattCharacteristic(rx, BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE, BluetoothGattCharacteristic.PERMISSION_WRITE)
     private val txCharacteristic = BluetoothGattCharacteristic(tx, BluetoothGattCharacteristic.PROPERTY_NOTIFY, BluetoothGattCharacteristic.PERMISSION_READ)
+    private val allocatorCharacteristic = BluetoothGattCharacteristic(allocator, BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE, BluetoothGattCharacteristic.PERMISSION_READ or BluetoothGattCharacteristic.PERMISSION_WRITE)
     private val descriptor = BluetoothGattDescriptor(cccd, BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE)
+    private val allocatorSessions = ConcurrentHashMap<String, ByteArray>()
     private val blessedCentral = MeshBlessedCentral(
         context = context,
         localId = localId,
