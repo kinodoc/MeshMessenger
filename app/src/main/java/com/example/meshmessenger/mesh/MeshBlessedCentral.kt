@@ -26,6 +26,7 @@ class MeshBlessedCentral(
     private val onDiagnostic: (String, String) -> Unit,
     private val onFragment: (String, ByteArray) -> Unit,
     private val onL2capPeer: (BluetoothPeripheral, ScanResult, Int) -> Unit = { _, _, _ -> },
+    private val onRfcommPeer: (BluetoothPeripheral, ScanResult) -> Unit = { _, _ -> },
     private val onReady: (String, Boolean) -> Unit,
     private val onWrite: (String, Boolean) -> Unit
 ) {
@@ -238,16 +239,6 @@ class MeshBlessedCentral(
                     }
                     ?.takeIf { it > 0 }
 
-                if (advertisedPsm != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                    onDiagnostic(
-                        "BLE_BLESSED_ARBITRATION",
-                        "l2cap_psm=$advertisedPsm address=**" + peripheral.address.takeLast(5)
-                    )
-                    central.stopScan()
-                    onL2capPeer(peripheral, scanResult, advertisedPsm)
-                    return
-                }
-
                 val nodeBytes = when {
                     serviceData?.size == 12 -> serviceData.copyOfRange(4, 12)
                     serviceData?.size == 8 -> serviceData
@@ -285,6 +276,13 @@ class MeshBlessedCentral(
                     )
                     return
                 }
+
+                if (advertisedPsm != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    onDiagnostic(
+                        "BLE_BLESSED_ARBITRATION",
+                        "rfcomm_transport psm_present=" + advertisedPsm + " address=**" + peripheral.address.takeLast(5)
+                    )
+                }
                 if (localId.lowercase() > advertisedNodeId.lowercase()) {
                     onDiagnostic(
                         "BLE_BLESSED_ARBITRATION",
@@ -298,7 +296,8 @@ class MeshBlessedCentral(
                     "initiator local=" + localId + " peer=" + advertisedNodeId
                 )
                 central.stopScan()
-                central.connectPeripheral(peripheral, peripheralCallback)
+                onDiagnostic("BLE_RFCOMM", "peer_discovered_via_ble address=**" + peripheral.address.takeLast(5))
+                onRfcommPeer(peripheral, scanResult)
             }
 
             override fun onScanFailed(scanFailure: com.welie.blessed.ScanFailure) {
