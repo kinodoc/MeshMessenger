@@ -299,22 +299,26 @@ class MeshGattNode(
         val data = AdvertiseData.Builder()
             .setIncludeDeviceName(false)
             .addServiceUuid(ParcelUuid(service))
-            .addManufacturerData(0xFFFF, nodeIdBytes)
             .build()
-        val scanResponse = if (l2capTransport.psm > 0) {
+        // Keep the primary packet to service UUID only. A 128-bit UUID plus
+        // manufacturer data can exceed the legacy 31-byte advertising budget
+        // on Android 8/11 OEM stacks and causes ADVERTISE_FAILED_DATA_TOO_LARGE.
+        // Put the stable Node ID in the scan response; on API 29+ prepend the
+        // dynamic L2CAP PSM, yielding [PSM(4) + NodeId(8)].
+        val scanPayload = if (l2capTransport.psm > 0) {
             val psm = l2capTransport.psm
-            val psmBytes = byteArrayOf(
+            byteArrayOf(
                 (psm ushr 24).toByte(),
                 (psm ushr 16).toByte(),
                 (psm ushr 8).toByte(),
                 psm.toByte()
-            )
-            AdvertiseData.Builder()
-                .addServiceData(ParcelUuid(service), psmBytes)
-                .build()
+            ) + nodeIdBytes
         } else {
-            AdvertiseData.Builder().build()
+            nodeIdBytes
         }
+        val scanResponse = AdvertiseData.Builder()
+            .addServiceData(ParcelUuid(service), scanPayload)
+            .build()
 
         var retriedWithoutScanResponse = false
         advertiseCallback = object : AdvertiseCallback() {
@@ -393,10 +397,15 @@ class MeshGattNode(
                 }
                 val key = runCatching { Base64.getDecoder().decode(parts[3]) }.getOrNull()
                 if (key != null && key.isNotEmpty()) {
-                    // A server-side connection becomes READY only after the peer
-                    // completed the application HELLO handshake. This is the same
-                    // readiness boundary used by the BLESSED central.
-                    gattReady.add(from)
+                    // L2CAP has its own socket/handshake lifecycle and must not be
+                    // gated by the GATT-ready set. If this HELLO arrived over an
+                    // L2CAP socket, mark that socket application-ready directly.
+                    val l2capHello = l2capTransport.markReady(from)
+                    if (!l2capHello) {
+                        // GATT fallback reaches the same application-ready boundary.
+                        gattReady.add(from)
+                        blessedCentral.markPeerHello(from)
+                    }
                     peerLastSeenAt[peerId] = System.currentTimeMillis()
                     onDiagnostic("BLE_GATT_READY", "server_hello=true address=**" + from.takeLast(5))
                     onPeer(peerId, parts[2].ifBlank { peerId.take(8) }, key)
@@ -532,7 +541,7 @@ class MeshGattNode(
         // calling it back here creates an infinite main-thread recursion:
         // peer-count -> retryPending -> peer-count -> ...
         if (serverClients.isEmpty() && blessedCentral.readyAddresses().isEmpty() &&
-            !l2capTransport.readyAddresses().any { gattReady.contains(it) }) return
+            l2capTransport.readyAddresses().isEmpty()) return
         flushQueue()
     }
 
@@ -543,7 +552,7 @@ class MeshGattNode(
         // API 29+ peers use the Briar-style L2CAP CoC transport. The socket is
         // considered application-ready only after the same HELLO exchange used
         // by the GATT fallback has completed.
-        val l2capReady = l2capTransport.readyAddresses().filter { gattReady.contains(it) }
+        val l2capReady = l2capTransport.readyAddresses()
         for (address in l2capReady) {
             for (entry in entries) {
                 val waitingSince = awaitingDelivery[address]?.get(entry.id)
@@ -655,7 +664,7 @@ class MeshGattNode(
         // L2CAP carries complete MeshPacket frames directly; GATT keeps the
         // existing 180-byte fragmentation path for the compatibility fallback.
         for (address in l2capTransport.readyAddresses()) {
-            if (address == except || !gattReady.contains(address)) continue
+            if (address == except) continue
             l2capTransport.send(address, bytes)
         }
 
@@ -673,7 +682,7 @@ class MeshGattNode(
         // reach READY only after the HELLO handshake has completed.
         val readyAddresses = gattReady.toMutableSet().apply {
             addAll(blessedCentral.readyAddresses())
-            addAll(l2capTransport.readyAddresses().filter { gattReady.contains(it) })
+            addAll(l2capTransport.readyAddresses())
         }
         val uniquePeers = mutableSetOf<String>()
         for (address in readyAddresses) uniquePeers.add(peerNodeIds[address] ?: address)
@@ -684,7 +693,7 @@ class MeshGattNode(
 
     /** True when at least one BLE transport completed the application handshake. */
     fun isBleTransportReady(): Boolean =
-        l2capTransport.readyAddresses().any { gattReady.contains(it) } ||
+        l2capTransport.readyAddresses().isNotEmpty() ||
             gattReady.isNotEmpty() || blessedCentral.isReady()
 
     /** True only when the GATT server, BLE advertiser and BLE scanner are all running. */
