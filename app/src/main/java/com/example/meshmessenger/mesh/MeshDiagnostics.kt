@@ -7,6 +7,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
 /** Bounded technical event log. Callers must log state/counters/error codes, never chat data. */
 class MeshDiagnostics(context: Context) {
@@ -24,6 +25,7 @@ class MeshDiagnostics(context: Context) {
     private val file = File(context.filesDir, FILE_NAME)
     private val lock = Any()
     private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+    private val sessionId = UUID.randomUUID().toString().replace("-", "").take(8)
 
     fun event(type: String, detail: String = "") {
         val safeType = type.replace(Regex("[\\r\\n|]"), " ").take(80)
@@ -32,6 +34,7 @@ class MeshDiagnostics(context: Context) {
             append(formatter.format(Date()))
             append("|v=").append(BuildConfig.VERSION_NAME)
             append("|api=").append(Build.VERSION.SDK_INT)
+            append("|sid=").append(sessionId)
             append("|").append(safeType)
             if (safeDetail.isNotBlank()) append("|").append(safeDetail)
         }
@@ -56,13 +59,16 @@ class MeshDiagnostics(context: Context) {
      */
     fun readForUpload(): String = synchronized(lock) {
         runCatching {
-            file.readLines(Charsets.UTF_8).takeLast(MAX_LINES).joinToString("\n") { line ->
-                val fields = line.split('|', limit = 5)
+            file.readLines(Charsets.UTF_8)
+                .filter { it.contains("|sid=$sessionId|") }
+                .takeLast(MAX_LINES)
+                .joinToString("\n") { line ->
+                val fields = line.split('|', limit = 6)
                 if (fields.size < 4) {
                     sanitize(line)
                 } else {
-                    val header = fields.take(4).joinToString("|")
-                    val detail = fields.getOrNull(4)?.let { sanitize(it) }.orEmpty()
+                    val header = fields.take(5).joinToString("|")
+                    val detail = fields.getOrNull(5)?.let { sanitize(it) }.orEmpty()
                     if (detail.isBlank()) header else "$header|$detail"
                 }
             }
