@@ -12,6 +12,7 @@ class MeshRouter(
 
     companion object {
         const val DELIVERY_ACK_PREFIX = "__MESH_DELIVERY_ACK__:"
+        const val PROFILE_UPDATE_PREFIX = "__MESH_PROFILE_V1__:"
     }
 
     fun createEncryptedMessage(destinationId: String, recipientPublicKey: PublicKey, text: String, senderName: String = "", ttl: Int = 8): MeshPacket {
@@ -22,6 +23,15 @@ class MeshRouter(
         val draft = MeshPacket(id, localId, destinationId, ttl, senderPublic.encoded, ByteArray(1), senderName)
         val encrypted = CryptoManager.encrypt(text.toByteArray(Charsets.UTF_8), identityPrivateKey, recipientPublicKey, draft.aad())
         return draft.copy(payload = encrypted).also { seen.acceptFirstTime(it.messageId) }
+    }
+
+    fun createProfileUpdate(destinationId: String, recipientPublicKey: PublicKey, displayName: String): MeshPacket {
+        val safeName = displayName.trim().ifBlank { "Я" }.take(64)
+        return createEncryptedMessage(
+            destinationId,
+            recipientPublicKey,
+            PROFILE_UPDATE_PREFIX + safeName
+        )
     }
 
     fun createDeliveryAck(received: MeshPacket, senderName: String = ""): MeshPacket {

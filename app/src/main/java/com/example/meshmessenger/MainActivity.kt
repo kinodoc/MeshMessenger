@@ -84,6 +84,19 @@ class MainActivity : ComponentActivity() {
     // Refresh the visible chat when a message arrives while its dialog is already open.
     private var refreshOpenChat: (() -> Unit)? = null
     private val contactStatusHandler = Handler(Looper.getMainLooper())
+
+    private val contactUpdatedReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != MeshForegroundService.ACTION_CONTACT_UPDATED) return
+            val nodeId = intent.getStringExtra(MeshForegroundService.EXTRA_SOURCE_ID) ?: return
+            val name = intent.getStringExtra(MeshForegroundService.EXTRA_CONTACT_NAME) ?: return
+            if (selected?.nodeId == nodeId) {
+                selected = contacts.get(nodeId) ?: selected
+                refreshOpenChat?.invoke()
+            }
+            log.text = "Контакт обновлён: $name"
+        }
+    }
     private val contactStatusRunnable = object : Runnable {
         override fun run() {
             updateSelectedContactStatus()
@@ -796,6 +809,10 @@ class MainActivity : ComponentActivity() {
             .setView(input)
             .setPositiveButton("Сохранить") { _, _ ->
                 identity.displayName = input.text.toString()
+                startService(Intent(this, MeshForegroundService::class.java).apply {
+                    action = MeshForegroundService.ACTION_PROFILE_NAME_CHANGED
+                    putExtra(MeshForegroundService.EXTRA_CONTACT_NAME, identity.displayName)
+                })
                 buildHome()
 
             }
@@ -803,9 +820,56 @@ class MainActivity : ComponentActivity() {
             .show()
     }
 
+    private fun editContactDialog(contact: ContactStore.Contact) {
+        val input = EditText(this).apply {
+            setText(contact.name)
+            selectAll()
+            hint = "Имя контакта"
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Редактировать контакт")
+            .setMessage("Node ID и ключ контакта нельзя изменить.")
+            .setView(input)
+            .setPositiveButton("Сохранить") { _, _ ->
+                val newName = input.text.toString().trim().ifBlank { contact.nodeId.take(8) }
+                contacts.rename(contact.nodeId, newName)
+                selected = contacts.get(contact.nodeId) ?: contact.copy(name = newName)
+                refreshOpenChat?.invoke()
+                log.text = "Контакт переименован: $newName"
+            }
+            .setNegativeButton("Отмена", null)
+            .show()
+    }
+
+    private fun deleteContact(contact: ContactStore.Contact, closeChat: (() -> Unit)? = null) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Удалить контакт?")
+            .setMessage("Контакт «${contact.name}» будет удалён. История переписки останется на телефоне.")
+            .setPositiveButton("Удалить") { _, _ ->
+                contacts.delete(contact.nodeId)
+                if (selected?.nodeId == contact.nodeId) selected = null
+                closeChat?.invoke()
+                log.text = "Контакт удалён: ${contact.name}"
+            }
+            .setNegativeButton("Отмена", null)
+            .show()
+    }
+
+    private fun showContactActions(contact: ContactStore.Contact, closeChat: (() -> Unit)? = null) {
+        val items = arrayOf("Переименовать", "Редактировать контакт", "Удалить контакт")
+        android.app.AlertDialog.Builder(this)
+            .setTitle(contact.name)
+            .setItems(items) { _, which ->
+                when (which) {
+                    0, 1 -> editContactDialog(contact)
+                    2 -> deleteContact(contact, closeChat)
+                }
+            }
+            .show()
+    }
+
     private fun contactsDialog() {
         val dialog = android.app.Dialog(this)
-        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(18, 12, 18, 12)
@@ -887,10 +951,17 @@ class MainActivity : ComponentActivity() {
             setBackgroundColor(Color.TRANSPARENT)
         }
 
+        lateinit var chatDialog: android.app.Dialog
+
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), dp(12), dp(14), dp(12))
             background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_home_card)
+        }
+
+        val titleRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
         }
 
         val title = TextView(this).apply {
@@ -917,7 +988,19 @@ class MainActivity : ComponentActivity() {
         contactStatusHandler.removeCallbacks(contactStatusRunnable)
         contactStatusHandler.post(contactStatusRunnable)
 
-        header.addView(title)
+        titleRow.addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        titleRow.addView(Button(this).apply {
+            text = "⋮"
+            textSize = 24f
+            setTextColor(0xFF00E5FF.toInt())
+            background = android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
+            minWidth = dp(48)
+            minHeight = dp(48)
+            setOnClickListener {
+                showContactActions(contact) { chatDialog.dismiss() }
+            }
+        })
+        header.addView(titleRow)
         header.addView(nodeInfo)
         header.addView(connectionStatusView)
 
@@ -1045,7 +1128,15 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        refreshOpenChat = { if (selected?.nodeId == contact.nodeId) refresh() }
+        refreshOpenChat = {
+            if (selected?.nodeId == contact.nodeId) {
+                val current = contacts.get(contact.nodeId)
+                if (current != null) {
+                    title.text = current.name
+                    refresh()
+                }
+            }
+        }
 
         root.addView(header)
         root.addView(scroll, android.widget.LinearLayout.LayoutParams(
@@ -1061,24 +1152,24 @@ class MainActivity : ComponentActivity() {
             addView(root, FrameLayout.LayoutParams(-1, -1))
         }
 
-        val dialog = android.app.Dialog(this)
-        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
-        dialog.setContentView(chatFrame)
-        dialog.setCanceledOnTouchOutside(false)
-        dialog.setOnDismissListener {
+        chatDialog = android.app.Dialog(this)
+        chatDialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        chatDialog.setContentView(chatFrame)
+        chatDialog.setCanceledOnTouchOutside(false)
+        chatDialog.setOnDismissListener {
             if (selected?.nodeId == contact.nodeId) refreshOpenChat = null
         }
-        dialog.setOnShowListener {
-            dialog.window?.setBackgroundDrawable(
+        chatDialog.setOnShowListener {
+            chatDialog.window?.setBackgroundDrawable(
                 android.graphics.drawable.ColorDrawable(0xFF05080D.toInt())
             )
-            dialog.window?.setLayout(
+            chatDialog.window?.setLayout(
                 android.view.WindowManager.LayoutParams.MATCH_PARENT,
                 android.view.WindowManager.LayoutParams.MATCH_PARENT
             )
         }
-        dialog.show()
-        dialog.window?.setLayout(
+        chatDialog.show()
+        chatDialog.window?.setLayout(
             android.view.WindowManager.LayoutParams.MATCH_PARENT,
             android.view.WindowManager.LayoutParams.MATCH_PARENT
         )
@@ -1184,6 +1275,7 @@ class MainActivity : ComponentActivity() {
             androidx.core.content.ContextCompat.registerReceiver(this, relayMessageReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_RELAY_MESSAGE), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             androidx.core.content.ContextCompat.registerReceiver(this, meshStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_MESH_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             androidx.core.content.ContextCompat.registerReceiver(this, peerStatusReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_PEER_STATUS), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+            androidx.core.content.ContextCompat.registerReceiver(this, contactUpdatedReceiver, android.content.IntentFilter(MeshForegroundService.ACTION_CONTACT_UPDATED), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             startService(Intent(this, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_MESH_STATUS_REQUEST))
         } catch (t: Throwable) {
             android.util.Log.e("MeshMessenger", "onStart failure", t)
@@ -1202,6 +1294,7 @@ class MainActivity : ComponentActivity() {
         runCatching { unregisterReceiver(relayMessageReceiver) }
         runCatching { unregisterReceiver(meshStatusReceiver) }
         runCatching { unregisterReceiver(peerStatusReceiver) }
+        runCatching { unregisterReceiver(contactUpdatedReceiver) }
         super.onStop()
     }
 

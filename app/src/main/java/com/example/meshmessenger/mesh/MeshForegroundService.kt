@@ -36,12 +36,15 @@ class MeshForegroundService : Service() {
         const val EXTRA_TRANSPORT_MODE = "transport_mode"
 	const val ACTION_SEND_MESH = "com.example.meshmessenger.SEND_MESH"
         const val EXTRA_PACKET = "packet"
+        const val ACTION_PROFILE_NAME_CHANGED = "com.example.meshmessenger.PROFILE_NAME_CHANGED"
 
         const val ACTION_RELAY_MESSAGE = "com.example.meshmessenger.RELAY_MESSAGE"
         const val ACTION_MESH_MESSAGE = "com.example.meshmessenger.MESH_MESSAGE"
         const val EXTRA_RELAY_TEXT = "relay_text"
         const val EXTRA_SOURCE_ID = "source_id"
         const val EXTRA_MESH_TEXT = "mesh_text"
+        const val ACTION_CONTACT_UPDATED = "com.example.meshmessenger.CONTACT_UPDATED"
+        const val EXTRA_CONTACT_NAME = "contact_name"
 
         const val ACTION_MESH_STATUS = "com.example.meshmessenger.MESH_STATUS"
         const val ACTION_MESH_STATUS_REQUEST = "com.example.meshmessenger.MESH_STATUS_REQUEST"
@@ -250,6 +253,10 @@ class MeshForegroundService : Service() {
                 updateNotification("Mesh Messenger работает")
             }
 
+            ACTION_PROFILE_NAME_CHANGED -> {
+                sendProfileNameUpdate(intent.getStringExtra(EXTRA_CONTACT_NAME))
+            }
+
             ACTION_SEND_MESH -> {
                 val encoded = intent.getByteArrayExtra(EXTRA_PACKET)
                 diagnostics.event("PACKET_SEND_REQUEST", "bytes=${encoded?.size ?: 0} mode=$transportMode ble_ready=${node?.isBleTransportReady() == true} relay_ready=${relayTransport != null}")
@@ -324,7 +331,7 @@ class MeshForegroundService : Service() {
                 queue = queue,
                 onStatus = { updateNotification(it) },
                 onMessage = { text, sourceId, packet, _ ->
-                    handleIncomingPersisted(text, sourceId, packet.messageId.toString(), ACTION_RELAY_MESSAGE)
+                    handleIncomingPersisted(text, sourceId, packet, ACTION_RELAY_MESSAGE)
                 },
                 onDeliveryAck = { packetId -> sendDeliveryStatus(packetId) },
                 onPeer = { nodeId, name, publicKey, _ ->
@@ -374,7 +381,7 @@ class MeshForegroundService : Service() {
                     queue,
                     { updateNotification(it) },
                     { text, sourceId, packet ->
-                        handleIncomingPersisted(text, sourceId, packet.messageId.toString(), ACTION_MESH_MESSAGE)
+                        handleIncomingPersisted(text, sourceId, packet, ACTION_MESH_MESSAGE)
                     },
                     { nodeId, name, publicKey ->
                         val key = android.util.Base64.encodeToString(publicKey, android.util.Base64.NO_WRAP)
@@ -426,16 +433,66 @@ class MeshForegroundService : Service() {
     }
 
 
+    private fun sendProfileNameUpdate(name: String?) {
+        val identity = IdentityStore(this)
+        val safeName = name?.trim().orEmpty().ifBlank { identity.displayName }.take(64)
+        val router = MeshRouter(identity.nodeId, identity.keyPair.private).also {
+            it.identityPublicBytes = identity.keyPair.public.encoded
+        }
+        val contactsSnapshot = contacts.all()
+        contactsSnapshot.forEach { contact ->
+            val publicKey = runCatching {
+                CryptoManager.publicKeyFromBase64(contact.publicKeyBase64)
+            }.getOrNull() ?: return@forEach
+            val packet = runCatching {
+                router.createProfileUpdate(contact.nodeId, publicKey, safeName)
+            }.getOrNull() ?: return@forEach
+
+            pendingMesh.enqueue(packet)
+            if (transportMode != "RELAY") runCatching { node?.send(packet) }
+            if (transportMode != "BLE") runCatching { relayTransport?.send(packet) }
+        }
+        diagnostics.event("PROFILE_NAME_UPDATE", "contacts=${contactsSnapshot.size}")
+    }
+
     private fun handleIncomingPersisted(
         text: String,
         sourceId: String,
-        packetId: String?,
+        packet: MeshPacket,
         action: String
     ) {
+        val packetId = packet.messageId.toString()
+        if (text.startsWith(MeshRouter.PROFILE_UPDATE_PREFIX)) {
+            val newName = text.removePrefix(MeshRouter.PROFILE_UPDATE_PREFIX)
+                .trim().take(64)
+                .ifBlank { sourceId.take(8) }
+            val existing = contacts.get(sourceId)
+            if (existing != null) {
+                contacts.rename(sourceId, newName)
+            } else {
+                val key = Base64.encodeToString(packet.senderPublicKey, Base64.NO_WRAP)
+                contacts.upsert(
+                    ContactStore.Contact(
+                        nodeId = sourceId,
+                        name = newName,
+                        publicKeyBase64 = key,
+                        lastSeenAt = System.currentTimeMillis()
+                    )
+                )
+            }
+            sendBroadcast(Intent(ACTION_CONTACT_UPDATED).apply {
+                setPackage(packageName)
+                putExtra(EXTRA_SOURCE_ID, sourceId)
+                putExtra(EXTRA_CONTACT_NAME, newName)
+            })
+            diagnostics.event("PROFILE_NAME_RECEIVED", "source=${sourceId.take(12)}")
+            return
+        }
+
         val isNewMessage = chats.addIncomingIfAbsent(
             sourceId,
             text,
-            packetId.orEmpty()
+            packetId
         )
 
         if (isNewMessage) {
@@ -450,9 +507,7 @@ class MeshForegroundService : Service() {
                 putExtra(EXTRA_MESH_TEXT, text)
             }
             putExtra(EXTRA_SOURCE_ID, sourceId)
-            if (!packetId.isNullOrBlank()) {
-                putExtra(EXTRA_PACKET_ID, packetId)
-            }
+            putExtra(EXTRA_PACKET_ID, packetId)
         }
         sendBroadcast(intent)
     }
