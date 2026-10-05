@@ -14,6 +14,10 @@ import java.nio.charset.StandardCharsets
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 /** Bidirectional BLE GATT transport with a durable store-and-forward queue. */
 class MeshGattNode(
@@ -71,6 +75,7 @@ class MeshGattNode(
         private const val MAX_FRAGMENTS = 65535
         private const val REASSEMBLY_TIMEOUT_MS = 30_000L
         private const val DELIVERY_RETRY_MS = 10_000L
+        private const val GATT_WRITE_TIMEOUT_MS = 5_000L
         private const val PEER_PRESENCE_TTL_MS = 30_000L
     }
 
@@ -85,6 +90,12 @@ class MeshGattNode(
     private val writeQueues = mutableMapOf<String, ArrayDeque<WriteTask>>()
     private val writing = mutableSetOf<String>()
     private val helloWriting = mutableSetOf<String>()
+    private val writeTimeouts = mutableMapOf<String, ScheduledFuture<*>>()
+    private val helloWriteTimeouts = mutableMapOf<String, ScheduledFuture<*>>()
+    private val writeTimeoutExecutor: ScheduledExecutorService =
+        Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "MeshGattWriteTimeout").apply { isDaemon = true }
+        }
     private val notificationQueues = mutableMapOf<String, ArrayDeque<ByteArray>>()
     private val notifying = mutableSetOf<String>()
     // A successful GATT write only confirms the characteristic write callback.
@@ -312,6 +323,8 @@ class MeshGattNode(
                     writeQueues.remove(device.address)
                     writing.remove(device.address)
                     helloWriting.remove(device.address)
+                    writeTimeouts.remove(device.address)?.cancel(false)
+                    helloWriteTimeouts.remove(device.address)?.cancel(false)
                     notificationQueues.remove(device.address)
                     notifying.remove(device.address)
                     awaitingDelivery.remove(device.address)
@@ -398,10 +411,12 @@ class MeshGattNode(
                 if (characteristic.uuid != rx) return
                 val address = device.address
                 if (helloWriting.remove(address)) {
+                    helloWriteTimeouts.remove(address)?.cancel(false)
                     if (status != BluetoothGatt.GATT_SUCCESS) onStatus("BLE: HELLO не отправлен")
                     flushPeerQueue(address)
                     return
                 }
+                writeTimeouts.remove(address)?.cancel(false)
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     writing.remove(address)
                     onStatus("BLE: ошибка записи " + status)
@@ -450,7 +465,8 @@ class MeshGattNode(
             HELLO_MAGIC, localId, localName.take(64), key
         ).joinToString("|").toByteArray(StandardCharsets.UTF_8)
         characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        helloWriting.add(gatt.device.address)
+        val address = gatt.device.address
+        helloWriting.add(address)
         val started = runCatching {
             if (Build.VERSION.SDK_INT >= 33) {
                 gatt.writeCharacteristic(
@@ -462,7 +478,22 @@ class MeshGattNode(
                 gatt.writeCharacteristic(characteristic)
             }
         }.getOrDefault(false)
-        if (!started) helloWriting.remove(gatt.device.address)
+        if (!started) {
+            helloWriting.remove(address)
+            onStatus("BLE: HELLO не отправлен")
+            return
+        }
+        helloWriteTimeouts.remove(address)?.cancel(false)
+        helloWriteTimeouts[address] = writeTimeoutExecutor.schedule({
+            if (!helloWriting.remove(address)) return@schedule
+            onDiagnostic(
+                "BLE_GATT_HELLO_TIMEOUT",
+                "address=**" + address.takeLast(5) + ",timeout_ms=" + GATT_WRITE_TIMEOUT_MS
+            )
+            onStatus("BLE: HELLO завис, переподключение")
+            notifyReady.remove(address)
+            runCatching { gatt.disconnect() }
+        }, GATT_WRITE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
     }
 
     @SuppressLint("MissingPermission")
@@ -800,6 +831,11 @@ class MeshGattNode(
         notifying.clear()
         awaitingDelivery.clear()
         assemblies.clear()
+        writeTimeouts.values.forEach { it.cancel(false) }
+        helloWriteTimeouts.values.forEach { it.cancel(false) }
+        writeTimeouts.clear()
+        helloWriteTimeouts.clear()
+        writeTimeoutExecutor.shutdownNow()
         onPeerCountChanged(0)
         server?.close()
         server = null
