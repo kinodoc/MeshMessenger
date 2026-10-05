@@ -66,8 +66,21 @@ class MainActivity : ComponentActivity() {
     private lateinit var meshButton: Button
     private val meshActionHandler = Handler(Looper.getMainLooper())
     private val meshActionTimeout = Runnable {
+        val targetActive = pendingMeshTargetActive
         meshActionPending = false
+        meshActionHandler.removeCallbacks(this)
         meshButton.isEnabled = true
+
+        // A transport may initialize asynchronously, but the UI must never stay
+        // in a permanent "starting…" state when no definitive status arrived.
+        if (targetActive && !meshActive) {
+            meshButton.text = "▶ Запустить mesh"
+            status.text = "Mesh не запустился"
+            log.text = "Запуск Mesh не завершился за 35 секунд. Попробуй запустить ещё раз."
+        } else {
+            meshButton.text = if (meshActive) "■ Остановить mesh" else "▶ Запустить mesh"
+        }
+
         startService(Intent(this, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_MESH_STATUS_REQUEST))
     }
 
