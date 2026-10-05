@@ -31,6 +31,7 @@ class MeshBlessedCentral(
     private val connected = LinkedHashMap<String, BluetoothPeripheral>()
     private val helloWriteSucceeded = mutableSetOf<String>()
     private val ready = mutableSetOf<String>()
+    private val recoveryAttempts = mutableMapOf<String, Int>()
     private val peripheralCallback = object : BluetoothPeripheralCallback() {
         override fun onServicesDiscovered(peripheral: BluetoothPeripheral) {
             val address = peripheral.address
@@ -116,23 +117,46 @@ class MeshBlessedCentral(
         object : BluetoothCentralManagerCallback() {
             override fun onConnectedPeripheral(peripheral: BluetoothPeripheral) {
                 connected[peripheral.address] = peripheral
-                onDiagnostic("BLE_BLESSED_CONNECT", "connected address=**" + peripheral.address.takeLast(5))
+                recoveryAttempts.remove(peripheral.address)
+                onDiagnostic("BLE_BLESSED_CONNECT", "connected_services_ready address=**" + peripheral.address.takeLast(5))
             }
 
             override fun onConnectionFailed(peripheral: BluetoothPeripheral, status: HciStatus) {
-                onDiagnostic("BLE_BLESSED_CONNECT", "failed status=" + status)
-                onReady(peripheral.address, false)
-                handler.postDelayed({ startScan() }, 1000L)
+                val address = peripheral.address
+                val attempt = (recoveryAttempts[address] ?: 0) + 1
+                recoveryAttempts[address] = attempt
+                onDiagnostic("BLE_BLESSED_CONNECT", "failed status=" + status + " attempt=" + attempt + " address=**" + address.takeLast(5))
+                onReady(address, false)
+                if (attempt <= 1) {
+                    handler.postDelayed({
+                        onDiagnostic("BLE_BLESSED_RECOVERY", "auto_connect address=**" + address.takeLast(5))
+                        central.autoConnectPeripheral(peripheral, peripheralCallback)
+                    }, 700L)
+                } else {
+                    handler.postDelayed({ startScan() }, 1000L)
+                }
             }
 
             override fun onDisconnectedPeripheral(peripheral: BluetoothPeripheral, status: HciStatus) {
                 val address = peripheral.address
+                val wasReady = ready.contains(address)
                 connected.remove(address)
                 ready.remove(address)
                 helloWriteSucceeded.remove(address)
                 onReady(address, false)
-                onDiagnostic("BLE_BLESSED_CONNECT", "disconnected status=" + status +
+                onDiagnostic("BLE_BLESSED_CONNECT", "disconnected status=" + status + " was_ready=" + wasReady +
                     " address=**" + address.takeLast(5))
+                if (!wasReady) {
+                    val attempt = (recoveryAttempts[address] ?: 0) + 1
+                    recoveryAttempts[address] = attempt
+                    if (attempt <= 1) {
+                        handler.postDelayed({
+                            onDiagnostic("BLE_BLESSED_RECOVERY", "auto_connect_after_disconnect address=**" + address.takeLast(5))
+                            central.autoConnectPeripheral(peripheral, peripheralCallback)
+                        }, 700L)
+                        return
+                    }
+                }
                 handler.postDelayed({ startScan() }, 500L)
             }
 
@@ -238,6 +262,7 @@ class MeshBlessedCentral(
         connected.clear()
         helloWriteSucceeded.clear()
         ready.clear()
+        recoveryAttempts.clear()
         onDiagnostic("BLE_BLESSED", "stopped")
         central.close()
     }
