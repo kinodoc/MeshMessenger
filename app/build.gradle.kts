@@ -43,8 +43,8 @@ android {
         applicationId = "com.example.meshmessenger"
         minSdk = 26
         targetSdk = 36
-        versionCode = 95
-        versionName = "0.24.69"
+        versionCode = 97
+        versionName = "0.24.71"
     }
 
 }
