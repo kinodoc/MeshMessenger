@@ -869,8 +869,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun contactsDialog() {
-        val dialog = android.app.Dialog(this)
-        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        chatDialog = android.app.Dialog(this)
+        chatDialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(18, 12, 18, 12)
@@ -952,9 +952,11 @@ class MainActivity : ComponentActivity() {
             setBackgroundColor(Color.TRANSPARENT)
         }
 
+        lateinit var chatDialog: android.app.Dialog
+
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(12), dp(14), dp(12), dp(14), dp(12)
+            setPadding(dp(14), dp(12), dp(14), dp(12)
             background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_home_card)
         }
 
@@ -996,7 +998,7 @@ class MainActivity : ComponentActivity() {
             minWidth = dp(48)
             minHeight = dp(48)
             setOnClickListener {
-                showContactActions(contact)
+                showContactActions(contact) { chatDialog.dismiss() }
             }
         })
         header.addView(titleRow)
@@ -1153,22 +1155,22 @@ class MainActivity : ComponentActivity() {
 
         val dialog = android.app.Dialog(this)
         dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
-        dialog.setContentView(chatFrame)
-        dialog.setCanceledOnTouchOutside(false)
-        dialog.setOnDismissListener {
+        chatDialog.setContentView(chatFrame)
+        chatDialog.setCanceledOnTouchOutside(false)
+        chatDialog.setOnDismissListener {
             if (selected?.nodeId == contact.nodeId) refreshOpenChat = null
         }
-        dialog.setOnShowListener {
-            dialog.window?.setBackgroundDrawable(
+        chatDialog.setOnShowListener {
+            chatDialog.window?.setBackgroundDrawable(
                 android.graphics.drawable.ColorDrawable(0xFF05080D.toInt())
             )
-            dialog.window?.setLayout(
+            chatDialog.window?.setLayout(
                 android.view.WindowManager.LayoutParams.MATCH_PARENT,
                 android.view.WindowManager.LayoutParams.MATCH_PARENT
             )
         }
-        dialog.show()
-        dialog.window?.setLayout(
+        chatDialog.show()
+        chatDialog.window?.setLayout(
             android.view.WindowManager.LayoutParams.MATCH_PARENT,
             android.view.WindowManager.LayoutParams.MATCH_PARENT
         )
