@@ -22,12 +22,11 @@ class MeshBlessedCentral(
     private val rxUuid: UUID,
     private val txUuid: UUID,
     private val allocatorUuid: UUID,
-    private val rfcommInfoUuid: UUID,
     private val helloPayload: () -> ByteArray,
     private val onDiagnostic: (String, String) -> Unit,
     private val onFragment: (String, ByteArray) -> Unit,
     private val onL2capPeer: (BluetoothPeripheral, ScanResult, Int) -> Unit = { _, _, _ -> },
-    private val onRfcommPeer: (BluetoothPeripheral, String, UUID) -> Unit = { _, _, _ -> },
+    private val onRfcommPeer: (BluetoothPeripheral) -> Unit = { _ -> },
     private val onReady: (String, Boolean) -> Unit,
     private val onWrite: (String, Boolean) -> Unit
 ) {
@@ -44,38 +43,12 @@ class MeshBlessedCentral(
             val rx = peripheral.getCharacteristic(serviceUuid, rxUuid)
             val tx = peripheral.getCharacteristic(serviceUuid, txUuid)
             val allocator = peripheral.getCharacteristic(serviceUuid, allocatorUuid)
-            val rfcommInfo = peripheral.getCharacteristic(serviceUuid, rfcommInfoUuid)
             onDiagnostic("BLE_BLESSED_SERVICES", "discovered address=**" + address.takeLast(5) +
                 " allocator=" + (allocator != null) + " rx=" + (rx != null) + " tx=" + (tx != null))
             if (rx == null || tx == null) {
                 onDiagnostic("BLE_BLESSED_SERVICES", "required_rx_tx_missing address=**" + address.takeLast(5))
                 peripheral.cancelConnection()
                 return
-            }
-
-            // ALLOCATOR is optional. Some Android/OEM GATT stacks expose the
-            // working RX/TX characteristics but omit this auxiliary characteristic
-            // from the discovered table. It must not block the Mesh handshake.
-            if (allocator == null) {
-                onDiagnostic("BLE_ALLOCATOR", "optional_missing_continue address=**" + address.takeLast(5))
-            } else {
-                val session = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
-                sessionIds[address] = session
-                onDiagnostic("BLE_ALLOCATOR", "session_request address=**" + address.takeLast(5))
-                val startedSession = peripheral.writeCharacteristic(serviceUuid, allocatorUuid, session, WriteType.WITH_RESPONSE)
-                onDiagnostic("BLE_ALLOCATOR", "session_write_started=" + startedSession + " address=**" + address.takeLast(5))
-                if (startedSession) {
-                    val startedRead = peripheral.readCharacteristic(serviceUuid, allocatorUuid)
-                    onDiagnostic("BLE_ALLOCATOR", "session_read_started=" + startedRead + " address=**" + address.takeLast(5))
-                } else {
-                    onDiagnostic("BLE_ALLOCATOR", "optional_session_write_skipped address=**" + address.takeLast(5))
-                }
-            }
-            if (rfcommInfo != null) {
-                val startedInfo = peripheral.readCharacteristic(serviceUuid, rfcommInfoUuid)
-                onDiagnostic("BLE_RFCOMM_INFO", "read_started=" + startedInfo + " address=**" + address.takeLast(5))
-            } else {
-                onDiagnostic("BLE_RFCOMM_INFO", "characteristic_missing_fallback_gatt address=**" + address.takeLast(5))
             }
             val started = peripheral.setNotify(tx, true)
             onDiagnostic("BLE_BLESSED_NOTIFY", "start=" + started + " address=**" + address.takeLast(5))
@@ -112,22 +85,6 @@ class MeshBlessedCentral(
             status: GattStatus
         ) {
             val address = peripheral.address
-            if (characteristic.uuid == rfcommInfoUuid) {
-                if (status != GattStatus.SUCCESS) {
-                    onDiagnostic("BLE_RFCOMM_INFO", "read_failed status=" + status + " address=**" + address.takeLast(5))
-                    return
-                }
-                val info = value.toString(Charsets.UTF_8).split("|", limit = 2)
-                val classicAddress = info.getOrNull(0)?.trim()
-                val peerUuid = info.getOrNull(1)?.trim()?.let { runCatching { UUID.fromString(it) }.getOrNull() }
-                if (classicAddress.isNullOrBlank() || peerUuid == null || !android.bluetooth.BluetoothAdapter.checkBluetoothAddress(classicAddress)) {
-                    onDiagnostic("BLE_RFCOMM_INFO", "invalid value address=**" + address.takeLast(5))
-                    return
-                }
-                onDiagnostic("BLE_RFCOMM_INFO", "received classic=**" + classicAddress.takeLast(5) + " uuid=" + peerUuid)
-                onRfcommPeer(peripheral, classicAddress, peerUuid)
-                return
-            }
             if (characteristic.uuid == allocatorUuid) {
                 val expected = sessionIds[address]
                 val confirmed = status == GattStatus.SUCCESS && expected != null && value.contentEquals(expected)
@@ -320,9 +277,7 @@ class MeshBlessedCentral(
                     "initiator local=" + localId + " peer=" + advertisedNodeId
                 )
                 central.stopScan()
-                onDiagnostic("BLE_RFCOMM", "peer_discovered_via_ble connecting_gatt_for_transport_info address=**" + peripheral.address.takeLast(5))
-                runCatching { central.connectPeripheral(peripheral, peripheralCallback) }
-                    .onFailure { onDiagnostic("BLE_BLESSED_CONNECT", "connect_dispatch_failed error=" + it.javaClass.simpleName) }
+                // BLE is discovery only here. Start the Briar-style insecure RFCOMM connection directly using the discovered Bluetooth address; no custom GATT transport-info characteristic and no GATT connection are required.\n                onDiagnostic("BLE_RFCOMM", "peer_discovered_via_ble direct_connect address=**" + peripheral.address.takeLast(5) + " uuid=" + MeshProtocol.RFCOMM_SERVICE_UUID)\n                onRfcommPeer(peripheral)
             }
 
             override fun onScanFailed(scanFailure: com.welie.blessed.ScanFailure) {
