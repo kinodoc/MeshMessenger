@@ -60,6 +60,7 @@ class MeshDiagnostics(context: Context) {
     fun readForUpload(): String = synchronized(lock) {
         runCatching {
             file.readLines(Charsets.UTF_8)
+                .filter { it.contains("|sid=$sessionId|") }
                 .takeLast(MAX_LINES)
                 .joinToString("\n") { line ->
                 val fields = line.split('|', limit = 6)
