@@ -90,8 +90,8 @@ class MeshGattNode(
     private val writeQueues = mutableMapOf<String, ArrayDeque<WriteTask>>()
     private val writing = mutableSetOf<String>()
     private val helloWriting = mutableSetOf<String>()
-    private val writeTimeouts = mutableMapOf<String, ScheduledFuture<*>>()
-    private val helloWriteTimeouts = mutableMapOf<String, ScheduledFuture<*>>()
+    private val writeTimeouts = ConcurrentHashMap<String, ScheduledFuture<*>>()
+    private val helloWriteTimeouts = ConcurrentHashMap<String, ScheduledFuture<*>>()
     private val writeTimeoutExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor { runnable ->
             Thread(runnable, "MeshGattWriteTimeout").apply { isDaemon = true }
@@ -849,7 +849,6 @@ class MeshGattNode(
         helloWriteTimeouts.values.forEach { it.cancel(false) }
         writeTimeouts.clear()
         helloWriteTimeouts.clear()
-        writeTimeoutExecutor.shutdownNow()
         onPeerCountChanged(0)
         server?.close()
         server = null
