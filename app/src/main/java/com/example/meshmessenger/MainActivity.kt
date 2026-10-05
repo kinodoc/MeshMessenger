@@ -552,25 +552,36 @@ class MainActivity : ComponentActivity() {
     private fun itIsNotUsed() { }
 
     private fun checkForUpdates(manual: Boolean) {
+        if (isFinishing || isDestroyed) return
         if (manual) updateStatus.text = "Проверяем обновления…"
         updater.check { result ->
-            result.onSuccess { release ->
-                when {
-                    release == null -> if (manual) {
-                        updateStatus.text = "В GitHub Release нет APK для установки"
+            // A slow network response can arrive after Honor's system has paused or
+            // destroyed this Activity. Never update dead views or show a dialog then.
+            if (isFinishing || isDestroyed) return@check
+            runCatching {
+                result.onSuccess { release ->
+                    when {
+                        release == null -> if (manual) {
+                            updateStatus.text = "В GitHub Release нет APK для установки"
+                        }
+                        !updater.isNewer(release.version) -> if (manual) {
+                            updateStatus.text = "Установлена актуальная версия ${BuildConfig.VERSION_NAME}"
+                        }
+                        else -> {
+                            updateStatus.text = "Доступно обновление"
+                            showUpdateDialog(release)
+                        }
                     }
-                    !updater.isNewer(release.version) -> if (manual) {
-                        updateStatus.text = "Установлена актуальная версия ${BuildConfig.VERSION_NAME}"
-                    }
-                    else -> {
-                        updateStatus.text = "Доступно обновление"
-                        showUpdateDialog(release)
+                }.onFailure { error ->
+                    if (manual) {
+                        updateStatus.text = "Не удалось проверить обновление. Проверь подключение к интернету."
+                        android.util.Log.w("MeshMessenger", "Update check failed", error)
                     }
                 }
             }.onFailure { error ->
-                if (manual) {
-                    updateStatus.text = "Не удалось проверить обновление. Проверь подключение к интернету."
-                    android.util.Log.w("MeshMessenger", "Update check failed", error)
+                android.util.Log.e("MeshMessenger", "Update result UI failed", error)
+                if (manual && !isFinishing && !isDestroyed) {
+                    updateStatus.text = "Ошибка обработки ответа об обновлении"
                 }
             }
         }

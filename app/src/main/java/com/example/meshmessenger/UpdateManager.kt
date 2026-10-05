@@ -46,7 +46,8 @@ class UpdateManager(private val context: Context) {
                 // явно привязывать сокет к физической сети (EPERM).
                 // Проверяем привязку сразу и при неудаче пробуем следующую.
                 connection.connectTimeout = 5000
-                connection.connect()
+                // Do not connect here: callers must set request method and headers first.
+                // HttpURLConnection rejects changing them after connect().
                 return connection
             } catch (_: Exception) {
                 // Сеть могла исчезнуть или стать недоступной для UID из-за VPN.
