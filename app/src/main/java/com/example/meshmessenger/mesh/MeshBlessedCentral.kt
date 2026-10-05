@@ -68,26 +68,9 @@ class MeshBlessedCentral(
         ) {
             val address = peripheral.address
             onDiagnostic("BLE_BLESSED_NOTIFY", "status=" + status + " address=**" + address.takeLast(5))
-            if (characteristic.uuid == allocatorUuid && status == GattStatus.SUCCESS) {
-                val expected = sessionIds[address]
-                val confirmed = expected != null && characteristic.value.contentEquals(expected)
-                onDiagnostic("BLE_ALLOCATOR", "session_confirmed=" + confirmed + " address=**" + address.takeLast(5))
-                if (confirmed) allocatorConfirmed.add(address) else peripheral.cancelConnection()
-                return
-            }
             if (characteristic.uuid != txUuid || status != GattStatus.SUCCESS) {
                 if (status != GattStatus.SUCCESS) peripheral.cancelConnection()
                 return
-            }
-            if (!allocatorConfirmed.contains(address)) {
-                onDiagnostic("BLE_ALLOCATOR", "hello_blocked_until_session address=**" + address.takeLast(5))
-                peripheral.cancelConnection()
-                return
-            }
-            val started = peripheral.writeCharacteristic(serviceUuid, rxUuid, helloPayload(), WriteType.WITH_RESPONSE)
-            onDiagnostic("BLE_BLESSED_HELLO", "write_started=" + started + " address=**" + address.takeLast(5))
-            if (!started) {
-                peripheral.cancelConnection()
             }
         }
 
@@ -97,8 +80,30 @@ class MeshBlessedCentral(
             characteristic: BluetoothGattCharacteristic,
             status: GattStatus
         ) {
-            if (characteristic.uuid != txUuid) return
             val address = peripheral.address
+            if (characteristic.uuid == allocatorUuid) {
+                val expected = sessionIds[address]
+                val confirmed = status == GattStatus.SUCCESS && expected != null && value.contentEquals(expected)
+                onDiagnostic("BLE_ALLOCATOR", "session_read status=" + status +
+                    " bytes=" + value.size + " confirmed=" + confirmed +
+                    " address=**" + address.takeLast(5))
+                if (!confirmed) {
+                    peripheral.cancelConnection()
+                    return
+                }
+                allocatorConfirmed.add(address)
+                onDiagnostic("BLE_ALLOCATOR", "session_confirmed=true address=**" + address.takeLast(5))
+                val tx = peripheral.getCharacteristic(serviceUuid, txUuid)
+                if (tx == null) {
+                    peripheral.cancelConnection()
+                    return
+                }
+                val started = peripheral.setNotify(tx, true)
+                onDiagnostic("BLE_BLESSED_NOTIFY", "start=" + started + " address=**" + address.takeLast(5))
+                if (!started) peripheral.cancelConnection()
+                return
+            }
+            if (characteristic.uuid != txUuid) return
             onDiagnostic("BLE_BLESSED_RX", "status=" + status + " bytes=" + value.size +
                 " address=**" + address.takeLast(5))
             if (status == GattStatus.SUCCESS) onFragment(address, value.copyOf())
