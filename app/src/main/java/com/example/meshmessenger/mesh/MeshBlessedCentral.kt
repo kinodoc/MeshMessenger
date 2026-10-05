@@ -26,6 +26,7 @@ class MeshBlessedCentral(
     private val onDiagnostic: (String, String) -> Unit,
     private val onFragment: (String, ByteArray) -> Unit,
     private val onL2capPeer: (BluetoothPeripheral, ScanResult, Int) -> Unit = { _, _, _ -> },
+    private val onRfcommPeer: (BluetoothPeripheral, ScanResult) -> Unit = { _, _ -> },
     private val onReady: (String, Boolean) -> Unit,
     private val onWrite: (String, Boolean) -> Unit
 ) {
@@ -244,7 +245,8 @@ class MeshBlessedCentral(
                         "l2cap_psm=$advertisedPsm address=**" + peripheral.address.takeLast(5)
                     )
                     central.stopScan()
-                    onL2capPeer(peripheral, scanResult, advertisedPsm)
+                    onDiagnostic("BLE_RFCOMM", "peer_discovered_via_ble address=**" + peripheral.address.takeLast(5))
+                    onRfcommPeer(peripheral, scanResult)
                     return
                 }
 
@@ -298,7 +300,8 @@ class MeshBlessedCentral(
                     "initiator local=" + localId + " peer=" + advertisedNodeId
                 )
                 central.stopScan()
-                central.connectPeripheral(peripheral, peripheralCallback)
+                onDiagnostic("BLE_RFCOMM", "peer_discovered_via_ble address=**" + peripheral.address.takeLast(5))
+                onRfcommPeer(peripheral, scanResult)
             }
 
             override fun onScanFailed(scanFailure: com.welie.blessed.ScanFailure) {
