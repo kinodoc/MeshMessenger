@@ -62,8 +62,16 @@ class MeshL2capTransport(
     @SuppressLint("MissingPermission")
     fun start() {
         if (!isSupported() || running) return
-        if (context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) !=
-            android.content.pm.PackageManager.PERMISSION_GRANTED) return
+        // BLUETOOTH_CONNECT is a runtime permission only on Android 12+
+        // (API 31). Android 10/11 can use the L2CAP CoC API without this
+        // runtime gate; requiring it there silently disables L2CAP and leaves
+        // the transport stuck at psm=-1.
+        if (Build.VERSION.SDK_INT >= 31 &&
+            context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            onDiagnostic("BLE_L2CAP", "skipped_missing_connect_permission")
+            return
+        }
 
         running = true
         runCatching {
