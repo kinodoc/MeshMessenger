@@ -248,12 +248,12 @@ class MeshGattNode(
                     val serviceDataBytes = record?.getServiceData(ParcelUuid(service))?.size ?: 0
                     onDiagnostic(
                         "BLE_SCAN",
-                        "results=$scanResultCount matches=$scanMatchCount last_rssi=\${result.rssi} " +
-                            "uuid_count=\${uuids.size} service_uuid=$matchesService service_data_bytes=$serviceDataBytes"
+                        "results=$scanResultCount matches=$scanMatchCount last_rssi=${result.rssi} " +
+                            "uuid_count=${uuids.size} service_uuid=$matchesService service_data_bytes=$serviceDataBytes"
                     )
                 }
                 if (!matchesService) return
-                onDiagnostic("BLE_SCAN_MATCH", "rssi=\${result.rssi},address=**" + result.device.address.takeLast(5))
+                onDiagnostic("BLE_SCAN_MATCH", "rssi=${result.rssi},address=**" + result.device.address.takeLast(5))
                 val advertisedNodeId = record?.getServiceData(ParcelUuid(service))
                     ?.joinToString("") { "%02x".format(it.toInt() and 0xff) }
                     ?.takeIf { it.length == 16 }
