@@ -68,15 +68,6 @@ class MeshBlessedCentral(
                     onDiagnostic("BLE_ALLOCATOR", "optional_session_write_skipped address=**" + address.takeLast(5))
                 }
             }
-            val session = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
-            sessionIds[address] = session
-            onDiagnostic("BLE_ALLOCATOR", "session_request address=**" + address.takeLast(5))
-            val startedSession = peripheral.writeCharacteristic(serviceUuid, allocatorUuid, session, WriteType.WITH_RESPONSE)
-            onDiagnostic("BLE_ALLOCATOR", "session_write_started=" + startedSession + " address=**" + address.takeLast(5))
-            if (!startedSession) { peripheral.cancelConnection(); return }
-            val startedRead = peripheral.readCharacteristic(serviceUuid, allocatorUuid)
-            onDiagnostic("BLE_ALLOCATOR", "session_read_started=" + startedRead + " address=**" + address.takeLast(5))
-            if (!startedRead) { peripheral.cancelConnection(); return }
             val started = peripheral.setNotify(tx, true)
             onDiagnostic("BLE_BLESSED_NOTIFY", "start=" + started + " address=**" + address.takeLast(5))
             if (!started) {
