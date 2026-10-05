@@ -812,7 +812,7 @@ class MeshGattNode(
 
     @SuppressLint("MissingPermission")
     private fun flushPeerQueue(address: String) {
-        if (writing.contains(address)) return
+        if (writing.contains(address) || helloWriting.contains(address)) return
         val gatt = peers[address] ?: return
         if (!gattReady.contains(address)) return
         val task = writeQueues[address]?.firstOrNull() ?: return
