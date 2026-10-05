@@ -33,8 +33,6 @@ android {
 
     buildTypes {
         getByName("release") {
-            // The main-branch workflow signs the unsigned APK in a separate step.
-            // The tag release workflow supplies RELEASE_STORE_FILE and signs in Gradle.
             if (!releaseStoreFilePath.isNullOrBlank()) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -45,8 +43,8 @@ android {
         applicationId = "com.example.meshmessenger"
         minSdk = 26
         targetSdk = 36
-        versionCode = 78
-        versionName = "0.24.52"
+        versionCode = 79
+        versionName = "0.24.53"
     }
 
 }
