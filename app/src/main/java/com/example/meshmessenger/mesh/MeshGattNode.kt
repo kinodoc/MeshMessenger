@@ -532,15 +532,15 @@ class MeshGattNode(
         )
 
         serviceDiscoveryStarted.remove(address)
-        mainHandler.postDelayed({
-            if (!running || !peers.containsKey(address)) return@postDelayed
+        writeTimeoutExecutor.schedule({
+            if (!peers.containsKey(address)) return@schedule
             val started = runCatching { gatt.discoverServices() }.getOrDefault(false)
             if (started) serviceDiscoveryStarted.add(address)
             onDiagnostic(
                 "BLE_GATT_DISCOVERY",
                 "after_cache_refresh=" + started + " address=**" + address.takeLast(5)
             )
-        }, 350L)
+        }, 350L, TimeUnit.MILLISECONDS)
         return true
     }
     @SuppressLint("MissingPermission")
