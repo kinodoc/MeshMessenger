@@ -233,18 +233,18 @@ class MainActivity : ComponentActivity() {
 
             val save = canvas.save()
             canvas.clipRect(0f, horizonY, w, h)
-            // Long straight rails converge at a single point on the horizon.
-            val vanishX = w * 0.5f
-            var bottomX = -w * 1.35f
-            val railStep = 58f * density
-            while (bottomX <= w * 2.7f) {
-                val rail = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = Color.rgb(0, 126, 255)
-                    strokeWidth = 0.85f * density
-                    alpha = 150
-                }
-                canvas.drawLine(vanishX, horizonY, bottomX, h, rail)
-                bottomX += railStep
+            // Uniform vertical grid rails: parallel lines, no convergence bundle.
+            // This keeps the floor readable across the full screen width.
+            val rail = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(0, 126, 255)
+                strokeWidth = 0.85f * density
+                alpha = 150
+            }
+            val railStep = 72f * density
+            var railX = 0f
+            while (railX <= w) {
+                canvas.drawLine(railX, horizonY, railX, h, rail)
+                railX += railStep
             }
 
             // Perspective-spaced cross-lines: very tight at the horizon, wider near the viewer.
