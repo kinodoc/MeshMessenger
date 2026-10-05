@@ -123,6 +123,10 @@ class MeshGattNode(
                 l2capTransport.connect(device, remotePsm)
             }
         },
+        onRfcommPeer = { peripheral, _ ->
+            runCatching { rfcommTransport.connect(adapter.getRemoteDevice(peripheral.address)) }
+                .onFailure { onDiagnostic("BLE_RFCOMM", "connect_dispatch_failed error=" + it.javaClass.simpleName) }
+        },
         onReady = { address, ready ->
             if (ready) {
                 gattReady.add(address)
