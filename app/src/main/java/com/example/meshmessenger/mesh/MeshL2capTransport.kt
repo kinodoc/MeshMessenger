@@ -47,6 +47,7 @@ class MeshL2capTransport(
         Thread(runnable, "MeshL2cap").apply { isDaemon = true }
     }
     private val sockets = ConcurrentHashMap<String, BluetoothSocket>()
+    private val ready = ConcurrentHashMap.newKeySet<String>()
     private val writers = ConcurrentHashMap<String, Any>()
     private val reads = ConcurrentHashMap<String, Future<*>>()
     private var serverSocket: BluetoothServerSocket? = null
@@ -178,6 +179,14 @@ class MeshL2capTransport(
         }
     }
 
+    /** Marks the socket application-ready after the Mesh HELLO exchange. */
+    fun markReady(address: String): Boolean {
+        if (!sockets.containsKey(address)) return false
+        ready.add(address)
+        onDiagnostic("BLE_L2CAP", "ready=true address=**" + address.takeLast(5))
+        return true
+    }
+
     fun sendAll(bytes: ByteArray): Int {
         var count = 0
         for (address in sockets.keys.toList()) {
@@ -186,11 +195,12 @@ class MeshL2capTransport(
         return count
     }
 
-    fun readyAddresses(): Set<String> = sockets.keys.toSet()
-    fun isReady(): Boolean = sockets.isNotEmpty()
+    fun readyAddresses(): Set<String> = ready.filter { sockets.containsKey(it) }.toSet()
+    fun isReady(): Boolean = ready.any { sockets.containsKey(it) }
 
     private fun remove(address: String, socket: BluetoothSocket) {
         if (sockets.remove(address, socket)) {
+            ready.remove(address)
             writers.remove(address)
             reads.remove(address)?.cancel(false)
             runCatching { socket.close() }
@@ -207,6 +217,7 @@ class MeshL2capTransport(
         reads.clear()
         sockets.values.forEach { runCatching { it.close() } }
         sockets.clear()
+        ready.clear()
         writers.clear()
         runCatching { serverSocket?.close() }
         serverSocket = null
