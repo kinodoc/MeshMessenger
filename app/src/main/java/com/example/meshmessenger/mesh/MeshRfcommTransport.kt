@@ -20,6 +20,7 @@ import java.util.concurrent.Future
 class MeshRfcommTransport(
     private val context: Context,
     private val adapter: BluetoothAdapter,
+    private val serviceUuid: UUID,
     private val helloPayload: () -> ByteArray,
     private val onDiagnostic: (String, String) -> Unit,
     private val onFrame: (String, ByteArray) -> Unit,
@@ -27,7 +28,6 @@ class MeshRfcommTransport(
     private val onDisconnected: (String) -> Unit
 ) {
     companion object {
-        val SERVICE_UUID: UUID = UUID.fromString("7d2a1004-8b4f-4f10-9d3e-8b7d6a2f0001")
         private const val SERVICE_NAME = "MeshMessenger"
         private const val MAX_FRAME = 1024 * 1024
     }
@@ -55,7 +55,7 @@ class MeshRfcommTransport(
         running = true
         runCatching {
             // Briar uses insecure RFCOMM so an unpaired peer can connect.
-            serverSocket = adapter.listenUsingInsecureRfcommWithServiceRecord(SERVICE_NAME, SERVICE_UUID)
+            serverSocket = adapter.listenUsingInsecureRfcommWithServiceRecord(SERVICE_NAME, serviceUuid)
             onDiagnostic("BLE_RFCOMM", "server_opened mode=insecure")
             acceptTask = io.submit { acceptLoop() }
         }.onFailure {
@@ -77,16 +77,16 @@ class MeshRfcommTransport(
     }
 
     @SuppressLint("MissingPermission")
-    fun connect(device: BluetoothDevice) {
+    fun connect(address: String, peerServiceUuid: UUID) {
         if (!running) return
-        val address = device.address
+        val device = runCatching { adapter.getRemoteDevice(address) }.getOrNull() ?: return
         if (sockets.containsKey(address)) return
         io.submit {
             var socket: BluetoothSocket? = null
             try {
                 onDiagnostic(
                     "BLE_RFCOMM",
-                    "connect_start mode=insecure bonded=" +
+                    "connect_start mode=insecure uuid=" + peerServiceUuid + " bonded=" +
                         runCatching { device.bondState == BluetoothDevice.BOND_BONDED }.getOrDefault(false) +
                         " address=**" + address.takeLast(5)
                 )
@@ -94,7 +94,7 @@ class MeshRfcommTransport(
 
                 // Do not try secure RFCOMM first. Briar deliberately uses the
                 // insecure API because it does not require Bluetooth pairing.
-                socket = device.createInsecureRfcommSocketToServiceRecord(SERVICE_UUID)
+                socket = device.createInsecureRfcommSocketToServiceRecord(peerServiceUuid)
                 socket.connect()
                 attach(socket, "outgoing")
             } catch (t: Throwable) {
