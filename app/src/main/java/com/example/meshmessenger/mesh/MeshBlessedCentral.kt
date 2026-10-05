@@ -17,6 +17,7 @@ import java.util.UUID
 /** BLESSED-based BLE central: serialized scan/connect/GATT operations. */
 class MeshBlessedCentral(
     context: Context,
+    private val localId: String,
     private val serviceUuid: UUID,
     private val rxUuid: UUID,
     private val txUuid: UUID,
@@ -137,8 +138,52 @@ class MeshBlessedCentral(
 
             override fun onDiscoveredPeripheral(peripheral: BluetoothPeripheral, scanResult: ScanResult) {
                 if (connected.containsKey(peripheral.address)) return
-                onDiagnostic("BLE_BLESSED_SCAN_MATCH", "rssi=" + scanResult.rssi +
-                    " address=**" + peripheral.address.takeLast(5))
+
+                val advertisedNodeId = scanResult.scanRecord
+                    ?.getServiceData(android.os.ParcelUuid(serviceUuid))
+                    ?.joinToString("") { "%02x".format(it.toInt() and 0xff) }
+                    ?.takeIf { it.length == 16 }
+
+                onDiagnostic(
+                    "BLE_BLESSED_SCAN_MATCH",
+                    "rssi=" + scanResult.rssi +
+                        " address=**" + peripheral.address.takeLast(5) +
+                        " node=" + (advertisedNodeId ?: "unknown")
+                )
+
+                // Both Mesh phones advertise the same GATT service and both run
+                // a central scanner. If both call connectPeripheral() at once,
+                // Android/OEM stacks can race and one side commonly fails with
+                // GATT status 133. Use the stable Mesh Node ID as a deterministic
+                // initiator election: only the lexicographically smaller node
+                // opens the central connection; the other side stays peripheral
+                // and accepts the incoming GATT connection.
+                if (advertisedNodeId == null) {
+                    onDiagnostic(
+                        "BLE_BLESSED_ARBITRATION",
+                        "skip_missing_node_id address=**" + peripheral.address.takeLast(5)
+                    )
+                    return
+                }
+                if (advertisedNodeId == localId) {
+                    onDiagnostic(
+                        "BLE_BLESSED_ARBITRATION",
+                        "skip_self node=" + advertisedNodeId
+                    )
+                    return
+                }
+                if (localId.lowercase() > advertisedNodeId.lowercase()) {
+                    onDiagnostic(
+                        "BLE_BLESSED_ARBITRATION",
+                        "passive local=" + localId + " peer=" + advertisedNodeId
+                    )
+                    return
+                }
+
+                onDiagnostic(
+                    "BLE_BLESSED_ARBITRATION",
+                    "initiator local=" + localId + " peer=" + advertisedNodeId
+                )
                 central.stopScan()
                 central.connectPeripheral(peripheral, peripheralCallback)
             }
