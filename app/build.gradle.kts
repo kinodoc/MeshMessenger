@@ -43,9 +43,8 @@ android {
         applicationId = "com.example.meshmessenger"
         minSdk = 26
         targetSdk = 36
-        versionCode = 107
-        versionName = "0.24.84"
-        // CI release trigger
+        versionCode = 108
+        versionName = "0.24.85"
     }
 
 }
