@@ -54,8 +54,9 @@ class MeshRfcommTransport(
         }
         running = true
         runCatching {
-            serverSocket = adapter.listenUsingRfcommWithServiceRecord(SERVICE_NAME, SERVICE_UUID)
-            onDiagnostic("BLE_RFCOMM", "server_opened")
+            // Briar uses insecure RFCOMM so an unpaired peer can connect.
+            serverSocket = adapter.listenUsingInsecureRfcommWithServiceRecord(SERVICE_NAME, SERVICE_UUID)
+            onDiagnostic("BLE_RFCOMM", "server_opened mode=insecure")
             acceptTask = io.submit { acceptLoop() }
         }.onFailure {
             running = false
@@ -83,14 +84,18 @@ class MeshRfcommTransport(
         io.submit {
             var socket: BluetoothSocket? = null
             try {
-                onDiagnostic("BLE_RFCOMM", "connect_start address=**${address.takeLast(5)}")
+                onDiagnostic(
+                    "BLE_RFCOMM",
+                    "connect_start mode=insecure bonded=" +
+                        runCatching { device.bondState == BluetoothDevice.BOND_BONDED }.getOrDefault(false) +
+                        " address=**" + address.takeLast(5)
+                )
                 adapter.cancelDiscovery()
-                socket = runCatching {
-                    device.createRfcommSocketToServiceRecord(SERVICE_UUID).also { it.connect() }
-                }.getOrElse {
-                    onDiagnostic("BLE_RFCOMM", "secure_failed address=**${address.takeLast(5)} error=${it.javaClass.simpleName}")
-                    device.createInsecureRfcommSocketToServiceRecord(SERVICE_UUID).also { it.connect() }
-                }
+
+                // Do not try secure RFCOMM first. Briar deliberately uses the
+                // insecure API because it does not require Bluetooth pairing.
+                socket = device.createInsecureRfcommSocketToServiceRecord(SERVICE_UUID)
+                socket.connect()
                 attach(socket, "outgoing")
             } catch (t: Throwable) {
                 runCatching { socket?.close() }
