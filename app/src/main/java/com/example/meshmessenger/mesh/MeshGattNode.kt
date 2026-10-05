@@ -99,6 +99,10 @@ class MeshGattNode(
     private val helloWriteTimeouts = ConcurrentHashMap<String, ScheduledFuture<*>>()
     private val mtuTimeouts = ConcurrentHashMap<String, ScheduledFuture<*>>()
     private val serviceDiscoveryStarted = mutableSetOf<String>()
+    // Android 11/OEM GATT stacks can return a successful discovery callback while
+    // serving a stale cached service table. Retry one discovery after refreshing
+    // the hidden GATT cache before declaring the peer incompatible.
+    private val serviceCacheRefreshAttempts = ConcurrentHashMap<String, Int>()
     private val writeTimeoutExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor { runnable ->
             Thread(runnable, "MeshGattWriteTimeout").apply { isDaemon = true }
@@ -321,6 +325,7 @@ class MeshGattNode(
                     // some OEM Bluetooth stacks (including Android 11 devices).
                     val address = device.address
                     serviceDiscoveryStarted.remove(address)
+                    serviceCacheRefreshAttempts.remove(address)
                     val mtuRequested = runCatching { g.requestMtu(247) }.getOrDefault(false)
                     onDiagnostic("BLE_GATT_SETUP", "connected mtu_request=$mtuRequested")
                     if (mtuRequested) {
@@ -355,6 +360,7 @@ class MeshGattNode(
                     helloWriteTimeouts.remove(device.address)?.cancel(false)
                     mtuTimeouts.remove(device.address)?.cancel(false)
                     serviceDiscoveryStarted.remove(device.address)
+                    serviceCacheRefreshAttempts.remove(device.address)
                     notificationQueues.remove(device.address)
                     notifying.remove(device.address)
                     awaitingDelivery.remove(device.address)
@@ -376,13 +382,16 @@ class MeshGattNode(
                 }
             }
             override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
-                onDiagnostic("BLE_GATT_SERVICES", "status=$status,mesh_service=${g.getService(service) != null}")
+                val meshService = g.getService(service)
+                onDiagnostic("BLE_GATT_SERVICES", "status=" + status + ",mesh_service=" + (meshService != null))
                 if (status != BluetoothGatt.GATT_SUCCESS) {
-                    onStatus("BLE: ошибка обнаружения сервисов $status")
+                    if (refreshGattCacheAndRediscover(g, "discovery_status_" + status)) return
+                    onStatus("BLE: ошибка обнаружения сервисов " + status)
                     g.disconnect()
                     return
                 }
-                val remoteService = g.getService(service) ?: run {
+                val remoteService = meshService ?: run {
+                    if (refreshGattCacheAndRediscover(g, "mesh_service_missing")) return
                     onStatus("BLE: сервис Mesh не найден")
                     g.disconnect()
                     return
@@ -497,6 +506,43 @@ class MeshGattNode(
 
     }
 
+    @SuppressLint("MissingPermission")
+    private fun refreshGattCacheAndRediscover(gatt: BluetoothGatt, reason: String): Boolean {
+        val address = gatt.device.address
+        val attempt = (serviceCacheRefreshAttempts[address] ?: 0) + 1
+        if (attempt > 1) return false
+        serviceCacheRefreshAttempts[address] = attempt
+
+        val refreshed = runCatching {
+            val method = BluetoothGatt::class.java.getMethod("refresh")
+            (method.invoke(gatt) as? Boolean) ?: false
+        }.getOrElse {
+            onDiagnostic(
+                "BLE_GATT_CACHE_REFRESH",
+                "failed address=**" + address.takeLast(5) +
+                    " reason=" + reason + " error=" + it.javaClass.simpleName
+            )
+            false
+        }
+
+        onDiagnostic(
+            "BLE_GATT_CACHE_REFRESH",
+            "attempt=" + attempt + " address=**" + address.takeLast(5) +
+                " reason=" + reason + " refreshed=" + refreshed
+        )
+
+        serviceDiscoveryStarted.remove(address)
+        mainHandler.postDelayed({
+            if (!running || !peers.containsKey(address)) return@postDelayed
+            val started = runCatching { gatt.discoverServices() }.getOrDefault(false)
+            if (started) serviceDiscoveryStarted.add(address)
+            onDiagnostic(
+                "BLE_GATT_DISCOVERY",
+                "after_cache_refresh=" + started + " address=**" + address.takeLast(5)
+            )
+        }, 350L)
+        return true
+    }
     @SuppressLint("MissingPermission")
     private fun writeHello(gatt: BluetoothGatt) {
         val service = gatt.getService(service) ?: return
@@ -903,6 +949,7 @@ class MeshGattNode(
         helloWriteTimeouts.clear()
         mtuTimeouts.clear()
         serviceDiscoveryStarted.clear()
+        serviceCacheRefreshAttempts.clear()
         onPeerCountChanged(0)
         server?.close()
         server = null
