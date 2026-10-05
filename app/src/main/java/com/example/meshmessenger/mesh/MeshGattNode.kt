@@ -869,7 +869,6 @@ class MeshGattNode(
     private fun flushPeerQueue(address: String) {
         if (writing.contains(address) || helloWriting.contains(address)) return
         if (!gattReady.contains(address) && !blessedCentral.readyAddresses().contains(address)) return
-        val gatt = peers[address]
         val task = writeQueues[address]?.firstOrNull() ?: return
         val part = task.fragments.firstOrNull() ?: return
         // BLESSED serializes the client-side GATT write queue and handles the
@@ -891,7 +890,7 @@ class MeshGattNode(
             }, GATT_WRITE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             return
         }
-        val gatt = gatt ?: return
+        val gatt = peers[address] ?: return
         val characteristic = gatt.getService(service)?.getCharacteristic(rx) ?: return
         characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         characteristic.value = part

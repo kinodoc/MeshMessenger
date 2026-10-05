@@ -112,10 +112,6 @@ class MeshBlessedCentral(
     private val central: BluetoothCentralManager = BluetoothCentralManager(
         context.applicationContext,
         object : BluetoothCentralManagerCallback() {
-            override fun onConnectingPeripheral(peripheral: BluetoothPeripheral) {
-                onDiagnostic("BLE_BLESSED_CONNECT", "connecting address=**" + peripheral.address.takeLast(5))
-            }
-
             override fun onConnectedPeripheral(peripheral: BluetoothPeripheral) {
                 connected[peripheral.address] = peripheral
                 onDiagnostic("BLE_BLESSED_CONNECT", "connected address=**" + peripheral.address.takeLast(5))
@@ -152,8 +148,6 @@ class MeshBlessedCentral(
         },
         handler
     )
-
-    init { central.disableLogging() }
 
     fun start() {
         onDiagnostic("BLE_BLESSED", "start")
