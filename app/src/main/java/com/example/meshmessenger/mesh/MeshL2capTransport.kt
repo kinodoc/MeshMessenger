@@ -1,3 +1,5 @@
+package com.example.meshmessenger.mesh
+
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
