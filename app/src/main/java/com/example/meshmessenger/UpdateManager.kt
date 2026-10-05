@@ -24,44 +24,32 @@ class UpdateManager(private val context: Context) {
      * Do not fall back to URL.openConnection(): Android may route that through the VPN.
      */
     private fun openHttpConnection(url: String): HttpURLConnection {
+        // Prefer Android's normal routing. OEM network policies and VPNs can make
+        // an explicitly bound physical network unusable even when Internet works.
+        runCatching {
+            return URL(url).openConnection() as HttpURLConnection
+        }
+
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val candidates = cm.allNetworks.mapNotNull { network ->
             val caps = cm.getNetworkCapabilities(network) ?: return@mapNotNull null
-            val isInternetTransport =
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
-                !isInternetTransport ||
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-            ) return@mapNotNull null
+            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return@mapNotNull null
             network
         }.sortedByDescending { network ->
             cm.getNetworkCapabilities(network)
                 ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
         }
 
+        var lastError: Throwable? = null
         for (network in candidates) {
             try {
-                val connection = network.openConnection(URL(url)) as HttpURLConnection
-                // При активном VPN Android может запрещать приложению
-                // явно привязывать сокет к физической сети (EPERM).
-                // Проверяем привязку сразу и при неудаче пробуем следующую.
-                connection.connectTimeout = 5000
-                // Do not connect here: callers must set request method and headers first.
-                // HttpURLConnection rejects changing them after connect().
-                return connection
-            } catch (_: Exception) {
-                // Сеть могла исчезнуть или стать недоступной для UID из-за VPN.
+                return network.openConnection(URL(url)) as HttpURLConnection
+            } catch (error: Throwable) {
+                lastError = error
             }
         }
-
-        // Если Android не разрешает per-network binding при активном VPN,
-        // используем обычный маршрут системы. Он может идти через VPN,
-        // но не требует запрещённого bindSocket().
-        return URL(url).openConnection() as HttpURLConnection
+        throw lastError ?: IllegalStateException("Нет доступного сетевого подключения")
     }
-
     companion object {
         private const val RELEASES_URL = "https://api.github.com/repos/kinodoc/MeshMessenger/releases/latest"
         private const val RELEASE_PAGE_URL = "https://github.com/kinodoc/MeshMessenger/releases/latest"
@@ -74,6 +62,7 @@ class UpdateManager(private val context: Context) {
         Thread {
             val result = runCatching { fetchLatestFromApi() }
                 .recoverCatching { fetchLatestFromGitHubPage() }
+                .recoverCatching { fetchLatestFromRedirect() }
             Handler(Looper.getMainLooper()).post { onResult(result) }
         }.start()
     }
@@ -109,6 +98,26 @@ class UpdateManager(private val context: Context) {
         return null
     }
 
+    private fun fetchLatestFromRedirect(): ReleaseInfo? {
+        val connection = openHttpConnection(RELEASE_PAGE_URL).apply {
+            requestMethod = "HEAD"
+            connectTimeout = 8000
+            readTimeout = 8000
+            instanceFollowRedirects = true
+            setRequestProperty("User-Agent", "MeshMessenger")
+        }
+        return try {
+            if (connection.responseCode !in 200..399) error("GitHub redirect HTTP " + connection.responseCode)
+            val path = connection.url.path ?: return null
+            val tag = Regex("/releases/tag/([^/]+)")
+                .find(path)?.groupValues?.getOrNull(1)?.removePrefix("v")
+                ?: return null
+            val apkName = "MeshMessenger-v" + tag + ".apk"
+            ReleaseInfo(tag, "https://github.com/kinodoc/MeshMessenger/releases/download/v" + tag + "/" + apkName, apkName)
+        } finally {
+            connection.disconnect()
+        }
+    }
     private fun fetchLatestFromGitHubPage(): ReleaseInfo? {
         val connection = openHttpConnection(RELEASE_PAGE_URL).apply {
             requestMethod = "GET"
