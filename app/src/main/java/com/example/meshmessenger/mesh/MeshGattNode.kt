@@ -654,7 +654,10 @@ class MeshGattNode(
      */
     @SuppressLint("MissingPermission")
     fun retryPending() {
-        onPeerCountChanged(peerCount())
+        // Retrying the durable queue must not publish peer-count state.
+        // The peer-count callback schedules retryPending() when a peer appears;
+        // calling it back here creates an infinite main-thread recursion:
+        // peer-count -> retryPending -> peer-count -> ...
         if (peers.isEmpty() && serverClients.isEmpty()) return
         flushQueue()
     }
