@@ -44,7 +44,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 100
-        versionName = "0.24.75"
+        versionName = "0.24.76"
     }
 
 }
