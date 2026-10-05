@@ -956,7 +956,7 @@ class MainActivity : ComponentActivity() {
 
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(12), dp(14), dp(12)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
             background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_home_card)
         }
 
