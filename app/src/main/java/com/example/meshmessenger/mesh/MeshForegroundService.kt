@@ -68,6 +68,7 @@ class MeshForegroundService : Service() {
     private lateinit var chats: ChatStore
     private var blePeerCount = 0
     private var relayPeerCount = 0
+    private var lastPeerStatusDiagnostic: String? = null
     private var nodeStartedAtMs = 0L
     private lateinit var diagnostics: MeshDiagnostics
     private lateinit var bluetoothMonitor: MeshBluetoothMonitor
@@ -506,7 +507,13 @@ class MeshForegroundService : Service() {
     }
 
     private fun sendPeerStatus() {
-        diagnostics.event("PEER_STATUS", "ble=$blePeerCount,relay=$relayPeerCount")
+        // UI status broadcasts may be repeated for lifecycle/replay requests,
+        // but diagnostic logging should only record actual count changes.
+        val detail = "ble=$blePeerCount,relay=$relayPeerCount"
+        if (detail != lastPeerStatusDiagnostic) {
+            lastPeerStatusDiagnostic = detail
+            diagnostics.event("PEER_STATUS", detail)
+        }
         val intent = Intent(ACTION_PEER_STATUS).apply {
             setPackage(packageName)
             putExtra(EXTRA_BLE_COUNT, blePeerCount)
