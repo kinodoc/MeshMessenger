@@ -68,6 +68,53 @@ class MeshGattNode(
     private val rxCharacteristic = BluetoothGattCharacteristic(rx, BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE, BluetoothGattCharacteristic.PERMISSION_WRITE)
     private val txCharacteristic = BluetoothGattCharacteristic(tx, BluetoothGattCharacteristic.PROPERTY_NOTIFY, BluetoothGattCharacteristic.PERMISSION_READ)
     private val descriptor = BluetoothGattDescriptor(cccd, BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE)
+    private val blessedCentral = MeshBlessedCentral(
+        context = context,
+        serviceUuid = service,
+        rxUuid = rx,
+        txUuid = tx,
+        helloPayload = {
+            val key = Base64.getEncoder().encodeToString(localPublicKey)
+            listOf(HELLO_MAGIC, localId, localName.take(64), key)
+                .joinToString("|").toByteArray(StandardCharsets.UTF_8)
+        },
+        onDiagnostic = onDiagnostic,
+        onFragment = { address, bytes -> handleIncomingFragment(address, bytes) },
+        onReady = { address, ready ->
+            if (ready) {
+                gattReady.add(address)
+                onDiagnostic("BLE_BLESSED_READY", "ready=true address=**" + address.takeLast(5))
+                onPeerCountChanged(peerCount())
+                flushQueue()
+            } else {
+                gattReady.remove(address)
+                writing.remove(address)
+                onDiagnostic("BLE_BLESSED_READY", "ready=false address=**" + address.takeLast(5))
+                onPeerCountChanged(peerCount())
+            }
+        },
+        onWrite = { address, ok ->
+            if (writing.remove(address)) {
+                writeTimeouts.remove(address)?.cancel(false)
+            val queueForPeer = writeQueues[address]
+            val task = queueForPeer?.firstOrNull()
+            if (!ok) {
+                onDiagnostic("BLE_BLESSED_WRITE", "packet_failed address=**" + address.takeLast(5))
+                queueForPeer?.removeFirstOrNull()
+            } else if (task != null) {
+                val remaining = task.fragments.drop(1)
+                queueForPeer.removeFirst()
+                if (remaining.isEmpty()) {
+                    if (queue.snapshot().any { it.id == task.messageId }) {
+                        awaitingDelivery.getOrPut(address) { mutableMapOf() }[task.messageId] = System.currentTimeMillis()
+                    }
+                } else queueForPeer.addFirst(task.copy(fragments = remaining))
+            }
+            if (queueForPeer?.isEmpty() == true) writeQueues.remove(address)
+                flushPeerQueue(address)
+            }
+        }
+    )
 
     companion object {
         private const val TAG = "MeshGattDiag"
@@ -269,6 +316,12 @@ class MeshGattNode(
         }
         runCatching { adv.startAdvertising(settings, data, scanResponse, advertiseCallback!!) }
             .onFailure { onDiagnostic("BLE_ADVERTISE", "start_exception=" + it.javaClass.simpleName) }
+
+        // BLESSED owns the central-side scan/connect/GATT operation queue.
+        // Do not run the raw BluetoothLeScanner path in parallel.
+        blessedCentral.start()
+        onDiagnostic("BLE_BLESSED", "central_transport_enabled")
+        return
 
         scanner = adapter.bluetoothLeScanner
         val bleScanner = scanner ?: run {
@@ -794,7 +847,9 @@ class MeshGattNode(
         }
 
         // Application packets require the complete GATT setup and HELLO handshake.
-        val ready = peers.filterKeys { gattReady.contains(it) }.keys.toList()
+        val ready = (peers.keys + blessedCentral.readyAddresses())
+            .filter { gattReady.contains(it) || blessedCentral.readyAddresses().contains(it) }
+            .distinct()
         for (address in ready) {
             for (entry in entries) {
                 val waitingSince = awaitingDelivery[address]?.get(entry.id)
@@ -813,10 +868,29 @@ class MeshGattNode(
     @SuppressLint("MissingPermission")
     private fun flushPeerQueue(address: String) {
         if (writing.contains(address) || helloWriting.contains(address)) return
-        val gatt = peers[address] ?: return
-        if (!gattReady.contains(address)) return
+        if (!gattReady.contains(address) && !blessedCentral.readyAddresses().contains(address)) return
         val task = writeQueues[address]?.firstOrNull() ?: return
         val part = task.fragments.firstOrNull() ?: return
+        // BLESSED serializes the client-side GATT write queue and handles the
+        // Android stack workarounds. Fall back to the legacy client only when
+        // this address is not owned by BLESSED.
+        if (blessedCentral.readyAddresses().contains(address)) {
+            writing.add(address)
+            val started = blessedCentral.write(address, part)
+            if (!started) {
+                writing.remove(address)
+                onDiagnostic("BLE_BLESSED_WRITE", "start_failed address=**" + address.takeLast(5))
+                return
+            }
+            writeTimeouts.remove(address)?.cancel(false)
+            writeTimeouts[address] = writeTimeoutExecutor.schedule({
+                if (!writing.remove(address)) return@schedule
+                onDiagnostic("BLE_BLESSED_WRITE_TIMEOUT", "address=**" + address.takeLast(5) + ",timeout_ms=" + GATT_WRITE_TIMEOUT_MS)
+                writeQueues.remove(address)
+            }, GATT_WRITE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            return
+        }
+        val gatt = peers[address] ?: return
         val characteristic = gatt.getService(service)?.getCharacteristic(rx) ?: return
         characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         characteristic.value = part
@@ -904,20 +978,24 @@ class MeshGattNode(
         // A live GATT connection is itself proof that BLE is connected, even if
         // the peer's HELLO/presence packet has not arrived (or has expired).
         // Count both central and peripheral connections, deduplicated by address.
-        val connectedAddresses = peers.keys.toMutableSet().apply { addAll(serverClients.keys) }
-        return maxOf(connectedAddresses.size, peerLastSeenAt.count { now - it.value <= PEER_PRESENCE_TTL_MS })
+        val connectedAddresses = peers.keys.toMutableSet().apply {
+            addAll(serverClients.keys)
+            addAll(blessedCentral.readyAddresses())
+        }
+        return maxOf(connectedAddresses.size, blessedCentral.connectedCount(),
+            peerLastSeenAt.count { now - it.value <= PEER_PRESENCE_TTL_MS })
     }
 
     fun onlinePeerCount(): Int = peerCount()
 
     /** True when at least one central GATT connection completed the application handshake. */
-    fun isBleTransportReady(): Boolean = gattReady.isNotEmpty()
+    fun isBleTransportReady(): Boolean = gattReady.isNotEmpty() || blessedCentral.isReady()
 
     /** True only when the GATT server, BLE advertiser and BLE scanner are all running. */
     fun isHealthy(): Boolean = runCatching {
         adapter.isEnabled && gattServerReady && server != null &&
             advertisingStarted && advertiser != null &&
-            scanningStarted && scanner != null
+            blessedCentral.isRunning()
     }.getOrDefault(false)
 
     fun stop() {
@@ -948,6 +1026,7 @@ class MeshGattNode(
         advertiseCallback = null
         advertiser = null
         advertisingStarted = false
+        runCatching { blessedCentral.stop() }
         peers.values.forEach { runCatching { it.close() } }
         peers.clear()
         serverClients.clear()
