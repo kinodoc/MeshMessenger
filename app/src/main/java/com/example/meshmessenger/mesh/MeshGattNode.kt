@@ -113,6 +113,7 @@ class MeshGattNode(
         rxUuid = rx,
         txUuid = tx,
         allocatorUuid = allocator,
+        rfcommInfoUuid = MeshProtocol.RFCOMM_INFO_UUID,
         helloPayload = {
             val key = Base64.getEncoder().encodeToString(localPublicKey)
             listOf(HELLO_MAGIC, localId, localName.take(64), key)
