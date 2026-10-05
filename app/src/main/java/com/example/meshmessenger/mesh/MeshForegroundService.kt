@@ -251,14 +251,14 @@ class MeshForegroundService : Service() {
 
             ACTION_SEND_MESH -> {
                 val encoded = intent.getByteArrayExtra(EXTRA_PACKET)
-                diagnostics.event("PACKET_SEND_REQUEST", "bytes=${encoded?.size ?: 0} mode=$transportMode ble_ready=${node?.isHealthy() == true} relay_ready=${relayTransport != null}")
+                diagnostics.event("PACKET_SEND_REQUEST", "bytes=${encoded?.size ?: 0} mode=$transportMode ble_ready=${node?.isBleTransportReady() == true} relay_ready=${relayTransport != null}")
                 android.util.Log.d("MeshGattDiag", "service_send_mesh bytes=${encoded?.size ?: 0} nodeReady=${node != null}")
                 if (encoded != null) {
                     runCatching {
                         val packet = MeshPacket.decode(encoded)
                         if (packet != null) {
                             android.util.Log.d("MeshGattDiag", "service_packet_decoded id=${packet.messageId} src=${packet.sourceId.take(8)} dst=${packet.destinationId.take(8)}")
-                            diagnostics.event("PACKET_DECODED", "bytes=${encoded.size} ble_ready=${node?.isHealthy() == true} relay_ready=${relayTransport != null}")
+                            diagnostics.event("PACKET_DECODED", "bytes=${encoded.size} ble_ready=${node?.isBleTransportReady() == true} relay_ready=${relayTransport != null}")
                             if (transportMode != "RELAY") runCatching { node?.send(packet) }
                                 .onFailure { diagnostics.event("BLE_SEND_ERROR", "error_type=${it.javaClass.simpleName}") }
                             if (transportMode != "BLE") runCatching { relayTransport?.send(packet) }
@@ -310,6 +310,10 @@ class MeshForegroundService : Service() {
 
         val queue = PendingMessageStore(this)
 
+        // Apply the persisted transport mode before starting transports.
+        // In BLE-only mode do not briefly start Relay and immediately stop it.
+        if (transportMode == "BLE") stopRelayLayer()
+
         if (transportMode != "BLE" && relayTransport == null) runCatching {
             relayTransport = MeshRelayTransport(
                 localId = identity.nodeId,
@@ -347,7 +351,6 @@ class MeshForegroundService : Service() {
             android.util.Log.e("MeshMessenger", "Relay transport start failed", it)
         }
 
-        if (transportMode == "BLE" && relayTransport != null) stopRelayLayer()
         if (!startBle || transportMode == "RELAY") {
             sendMeshStatus(false)
             return
