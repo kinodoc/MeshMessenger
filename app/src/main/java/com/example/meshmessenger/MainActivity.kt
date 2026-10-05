@@ -221,7 +221,7 @@ class MainActivity : ComponentActivity() {
                 )
             }
             canvas.drawRect(0f, 0f, w, h, skyGlow)
-            val horizonY = h * 0.515f
+            val horizonY = h * 0.455f
             val horizonGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 shader = android.graphics.LinearGradient(
                     0f, horizonY - 26f * density, 0f, horizonY + 48f * density,
@@ -235,8 +235,8 @@ class MainActivity : ComponentActivity() {
             canvas.clipRect(0f, horizonY, w, h)
             // Long straight rails converge at a single point on the horizon.
             val vanishX = w * 0.5f
-            var bottomX = -w * 1.7f
-            val railStep = 26f * density
+            var bottomX = -w * 1.35f
+            val railStep = 58f * density
             while (bottomX <= w * 2.7f) {
                 val rail = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     color = Color.rgb(0, 126, 255)
@@ -249,15 +249,15 @@ class MainActivity : ComponentActivity() {
 
             // Perspective-spaced cross-lines: very tight at the horizon, wider near the viewer.
             val phase = offset / (18f * density)
-            for (i in 0..22) {
-                val t = (i + phase) / 22f
+            for (i in 0..26) {
+                val t = (i + phase) / 26f
                 val y = horizonY + (h - horizonY) * t * t
                 if (y < horizonY || y > h) continue
                 val p = ((y - horizonY) / (h - horizonY)).coerceIn(0f, 1f)
                 val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     color = Color.rgb(0, 157, 255)
-                    strokeWidth = (0.55f + p * 0.65f) * density
-                    alpha = (70 + p * 95).toInt()
+                    strokeWidth = (0.45f + p * 0.55f) * density
+                    alpha = (55 + p * 85).toInt()
                 }
                 canvas.drawLine(0f, y, w, y, line)
             }
