@@ -53,6 +53,7 @@ class MeshGattNode(
     private val notifyReady = mutableSetOf<String>()
     private val gattReady = mutableSetOf<String>()
     private val service = MeshProtocol.SERVICE_UUID
+    private val localRfcommUuid = UUID.nameUUIDFromBytes(("MeshMessenger-RFCOMM:" + localId).toByteArray(StandardCharsets.UTF_8))
     private val rx = MeshProtocol.RX_UUID
     private val tx = MeshProtocol.TX_UUID
     private val allocator = MeshProtocol.ALLOCATOR_UUID
@@ -81,6 +82,7 @@ class MeshGattNode(
     private val rfcommTransport = MeshRfcommTransport(
         context = context,
         adapter = adapter,
+        serviceUuid = localRfcommUuid,
         helloPayload = {
             val key = Base64.getEncoder().encodeToString(localPublicKey)
             listOf(HELLO_MAGIC, localId, localName.take(64), key)
@@ -101,6 +103,7 @@ class MeshGattNode(
     private val rxCharacteristic = BluetoothGattCharacteristic(rx, BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE, BluetoothGattCharacteristic.PERMISSION_WRITE)
     private val txCharacteristic = BluetoothGattCharacteristic(tx, BluetoothGattCharacteristic.PROPERTY_NOTIFY, BluetoothGattCharacteristic.PERMISSION_READ)
     private val allocatorCharacteristic = BluetoothGattCharacteristic(allocator, BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE, BluetoothGattCharacteristic.PERMISSION_READ or BluetoothGattCharacteristic.PERMISSION_WRITE)
+    private val rfcommInfoCharacteristic = BluetoothGattCharacteristic(MeshProtocol.RFCOMM_INFO_UUID, BluetoothGattCharacteristic.PROPERTY_READ, BluetoothGattCharacteristic.PERMISSION_READ)
     private val descriptor = BluetoothGattDescriptor(cccd, BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE)
     private val allocatorSessions = ConcurrentHashMap<String, ByteArray>()
     private val blessedCentral = MeshBlessedCentral(
@@ -110,6 +113,7 @@ class MeshGattNode(
         rxUuid = rx,
         txUuid = tx,
         allocatorUuid = allocator,
+        rfcommInfoUuid = MeshProtocol.RFCOMM_INFO_UUID,
         helloPayload = {
             val key = Base64.getEncoder().encodeToString(localPublicKey)
             listOf(HELLO_MAGIC, localId, localName.take(64), key)
@@ -123,9 +127,8 @@ class MeshGattNode(
                 l2capTransport.connect(device, remotePsm)
             }
         },
-        onRfcommPeer = { peripheral, _ ->
-            runCatching { rfcommTransport.connect(adapter.getRemoteDevice(peripheral.address)) }
-                .onFailure { onDiagnostic("BLE_RFCOMM", "connect_dispatch_failed error=" + it.javaClass.simpleName) }
+        onRfcommPeer = { _, classicAddress, peerUuid ->
+            rfcommTransport.connect(classicAddress, peerUuid)
         },
         onReady = { address, ready ->
             if (ready) {
@@ -216,6 +219,13 @@ class MeshGattNode(
             }
 
             override fun onCharacteristicReadRequest(device: BluetoothDevice, requestId: Int, offset: Int, characteristic: BluetoothGattCharacteristic) {
+                if (characteristic.uuid == MeshProtocol.RFCOMM_INFO_UUID) {
+                    val address = MeshBluetoothAddress.get(context, adapter)
+                    val info = address?.let { "$it|$localRfcommUuid".toByteArray(StandardCharsets.UTF_8) }
+                    onDiagnostic("BLE_RFCOMM_INFO", "read address=**" + device.address.takeLast(5) + " local_classic=" + (address != null))
+                    server?.sendResponse(device, requestId, if (info != null) BluetoothGatt.GATT_SUCCESS else BluetoothGatt.GATT_READ_NOT_PERMITTED, offset, info)
+                    return
+                }
                 if (characteristic.uuid == allocator) {
                     val session = allocatorSessions[device.address]
                     onDiagnostic("BLE_ALLOCATOR", "read address=**" + device.address.takeLast(5) + " allocated=" + (session != null))
@@ -295,6 +305,7 @@ class MeshGattNode(
         val gattService = BluetoothGattService(service, BluetoothGattService.SERVICE_TYPE_PRIMARY)
         txCharacteristic.addDescriptor(descriptor)
         gattService.addCharacteristic(allocatorCharacteristic)
+        gattService.addCharacteristic(rfcommInfoCharacteristic)
         gattService.addCharacteristic(rxCharacteristic)
         gattService.addCharacteristic(txCharacteristic)
         server?.addService(gattService)
