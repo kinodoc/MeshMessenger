@@ -82,6 +82,7 @@ class MeshGattNode(
     private val rfcommTransport = MeshRfcommTransport(
         context = context,
         adapter = adapter,
+        serviceUuid = localRfcommUuid,
         helloPayload = {
             val key = Base64.getEncoder().encodeToString(localPublicKey)
             listOf(HELLO_MAGIC, localId, localName.take(64), key)
