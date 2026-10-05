@@ -58,7 +58,17 @@ class MeshBlessedCentral(
             if (!startedRead) { peripheral.cancelConnection(); return }
             val started = peripheral.setNotify(tx, true)
             onDiagnostic("BLE_BLESSED_NOTIFY", "start=" + started + " address=**" + address.takeLast(5))
-            if (!started) peripheral.cancelConnection()
+            if (!started) {
+                peripheral.cancelConnection()
+                return
+            }
+            // The peer does not need notifications enabled to receive HELLO: HELLO
+            // is written to RX. On several Android/OEM stacks the notification-state
+            // callback can be delayed or never delivered even though the GATT link is
+            // already usable. Start the application handshake independently and retry
+            // until the write callback confirms it. This prevents a connected peer
+            // from getting stuck forever in waiting_for_hello.
+            scheduleHelloRetry(peripheral, 0)
         }
 
         override fun onNotificationStateUpdate(
@@ -100,7 +110,11 @@ class MeshBlessedCentral(
                 }
                 val started = peripheral.setNotify(tx, true)
                 onDiagnostic("BLE_BLESSED_NOTIFY", "start=" + started + " address=**" + address.takeLast(5))
-                if (!started) peripheral.cancelConnection()
+                if (!started) {
+                    peripheral.cancelConnection()
+                    return
+                }
+                scheduleHelloRetry(peripheral, 0)
                 return
             }
             if (characteristic.uuid != txUuid) return
@@ -266,6 +280,28 @@ class MeshBlessedCentral(
                 onDiagnostic("BLE_BLESSED_SCAN", "exception=" + it.javaClass.simpleName)
             }
         }
+    }
+
+    private fun scheduleHelloRetry(peripheral: BluetoothPeripheral, attempt: Int) {
+        val address = peripheral.address
+        if (helloWriteSucceeded.contains(address) || ready.contains(address)) return
+        if (attempt >= 5) {
+            onDiagnostic("BLE_BLESSED_HELLO", "retry_exhausted address=**" + address.takeLast(5))
+            peripheral.cancelConnection()
+            return
+        }
+        val delay = if (attempt == 0) 250L else 750L
+        handler.postDelayed({
+            if (helloWriteSucceeded.contains(address) || ready.contains(address)) return@postDelayed
+            val started = runCatching {
+                peripheral.writeCharacteristic(serviceUuid, rxUuid, helloPayload(), WriteType.WITH_RESPONSE)
+            }.getOrDefault(false)
+            onDiagnostic("BLE_BLESSED_HELLO", "write_started=" + started + " attempt=" + (attempt + 1) + " address=**" + address.takeLast(5))
+            // Some OEM stacks report write-started=true but never deliver the
+            // completion callback. Keep a bounded retry chain; a successful
+            // callback cancels it through the success guard above.
+            scheduleHelloRetry(peripheral, attempt + 1)
+        }, delay)
     }
 
     fun markPeerHello(address: String) {
