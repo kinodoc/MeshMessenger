@@ -70,7 +70,7 @@ class MeshBlessedCentral(
             onDiagnostic("BLE_BLESSED_NOTIFY", "status=" + status + " address=**" + address.takeLast(5))
             if (characteristic.uuid == allocatorUuid && status == GattStatus.SUCCESS) {
                 val expected = sessionIds[address]
-                val confirmed = expected != null && value.contentEquals(expected)
+                val confirmed = expected != null && characteristic.value.contentEquals(expected)
                 onDiagnostic("BLE_ALLOCATOR", "session_confirmed=" + confirmed + " address=**" + address.takeLast(5))
                 if (confirmed) allocatorConfirmed.add(address) else peripheral.cancelConnection()
                 return
