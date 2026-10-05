@@ -61,6 +61,7 @@ class MeshGattNode(
     private val descriptor = BluetoothGattDescriptor(cccd, BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE)
     private val blessedCentral = MeshBlessedCentral(
         context = context,
+        localId = localId,
         serviceUuid = service,
         rxUuid = rx,
         txUuid = tx,
