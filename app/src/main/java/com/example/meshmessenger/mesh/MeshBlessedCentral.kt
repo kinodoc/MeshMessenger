@@ -210,15 +210,22 @@ class MeshBlessedCentral(
             override fun onDiscoveredPeripheral(peripheral: BluetoothPeripheral, scanResult: ScanResult) {
                 if (connected.containsKey(peripheral.address)) return
 
-                val psmBytes = scanResult.scanRecord
+                // Keep the primary advertisement small enough for older OEM stacks:
+                // service UUID goes in the primary packet, while the scan response
+                // carries either [PSM(4) + NodeId(8)] on API 29+, or [NodeId(8)]
+                // on the GATT-only fallback. This avoids the 31-byte overflow caused
+                // by combining a 128-bit service UUID and manufacturer data.
+                val serviceData = scanResult.scanRecord
                     ?.getServiceData(android.os.ParcelUuid(serviceUuid))
-                    ?.takeIf { it.size == 4 }
-                val advertisedPsm = psmBytes?.let {
-                    ((it[0].toInt() and 0xff) shl 24) or
-                        ((it[1].toInt() and 0xff) shl 16) or
-                        ((it[2].toInt() and 0xff) shl 8) or
-                        (it[3].toInt() and 0xff)
-                }?.takeIf { it > 0 }
+                val advertisedPsm = serviceData
+                    ?.takeIf { it.size >= 12 }
+                    ?.let {
+                        ((it[0].toInt() and 0xff) shl 24) or
+                            ((it[1].toInt() and 0xff) shl 16) or
+                            ((it[2].toInt() and 0xff) shl 8) or
+                            (it[3].toInt() and 0xff)
+                    }
+                    ?.takeIf { it > 0 }
 
                 if (advertisedPsm != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                     onDiagnostic(
@@ -230,8 +237,12 @@ class MeshBlessedCentral(
                     return
                 }
 
-                val advertisedNodeId = scanResult.scanRecord
-                    ?.getManufacturerSpecificData(0xFFFF)
+                val nodeBytes = when {
+                    serviceData?.size == 12 -> serviceData.copyOfRange(4, 12)
+                    serviceData?.size == 8 -> serviceData
+                    else -> null
+                }
+                val advertisedNodeId = nodeBytes
                     ?.joinToString("") { "%02x".format(it.toInt() and 0xff) }
                     ?.takeIf { it.length == 16 }
 
