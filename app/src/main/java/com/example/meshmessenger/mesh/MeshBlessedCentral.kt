@@ -43,6 +43,13 @@ class MeshBlessedCentral(
             val rx = peripheral.getCharacteristic(serviceUuid, rxUuid)
             val tx = peripheral.getCharacteristic(serviceUuid, txUuid)
             val allocator = peripheral.getCharacteristic(serviceUuid, allocatorUuid)
+            onDiagnostic("BLE_BLESSED_SERVICES", "discovered address=**" + address.takeLast(5) +
+                " allocator=" + (allocator != null) + " rx=" + (rx != null) + " tx=" + (tx != null))
+            if (rx == null || tx == null) {
+                onDiagnostic("BLE_BLESSED_SERVICES", "required_rx_tx_missing address=**" + address.takeLast(5))
+                peripheral.cancelConnection()
+                return
+            }
             val started = peripheral.setNotify(tx, true)
             onDiagnostic("BLE_BLESSED_NOTIFY", "start=" + started + " address=**" + address.takeLast(5))
             if (!started) {
