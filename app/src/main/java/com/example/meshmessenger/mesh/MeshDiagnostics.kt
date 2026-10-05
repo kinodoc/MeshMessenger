@@ -13,8 +13,8 @@ import java.util.UUID
 class MeshDiagnostics(context: Context) {
     companion object {
         private const val FILE_NAME = "mesh_diagnostics.log"
-        private const val MAX_LINES = 800
-        private const val MAX_FILE_BYTES = 128 * 1024L
+        private const val MAX_LINES = 5000
+        private const val MAX_FILE_BYTES = 512 * 1024L
         private val sessionId = UUID.randomUUID().toString().replace("-", "").take(8)
         private val macAddress = Regex("(?i)\\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\\b")
         private val uuid = Regex("(?i)\\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\\b")
@@ -54,8 +54,9 @@ class MeshDiagnostics(context: Context) {
 
     fun readForUpload(): String = synchronized(lock) {
         runCatching {
+            // Keep the recent window across session boundaries. BLE failures often
+            // happen during startup/reconnect, before the report button is pressed.
             file.readLines(Charsets.UTF_8)
-                .filter { it.contains("|sid=" + sessionId + "|") }
                 .takeLast(MAX_LINES)
                 .joinToString("\n") { line ->
                     val fields = line.split('|', limit = 6)
