@@ -43,8 +43,8 @@ android {
         applicationId = "com.example.meshmessenger"
         minSdk = 26
         targetSdk = 36
-        versionCode = 104
-        versionName = "0.24.81"
+        versionCode = 105
+        versionName = "0.24.82"
     }
 
 }
@@ -56,7 +56,6 @@ kotlin {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.17.0")
     implementation("com.github.weliem:blessed-android:2.0.6")
     implementation("androidx.activity:activity-ktx:1.11.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
