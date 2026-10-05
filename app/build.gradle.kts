@@ -45,6 +45,7 @@ android {
         targetSdk = 36
         versionCode = 107
         versionName = "0.24.84"
+        // CI release trigger
     }
 
 }
