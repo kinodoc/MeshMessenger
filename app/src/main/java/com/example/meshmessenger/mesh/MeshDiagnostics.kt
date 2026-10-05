@@ -15,7 +15,7 @@ class MeshDiagnostics(context: Context) {
         private const val FILE_NAME = "mesh_diagnostics.log"
         private const val MAX_LINES = 800
         private const val MAX_FILE_BYTES = 128 * 1024L
-        private val macAddress = Regex("(?i)\\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\\b")
+        // One process-wide session id is shared by the foreground service and the activity.\n        // Previously this was an instance field, so MeshBugReport created a second\n        // MeshDiagnostics instance with a different sid and filtered out every event.\n            private val macAddress = Regex("(?i)\\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\\b")
         private val uuid = Regex("(?i)\\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\\b")
         private val ipv4 = Regex("\\b(?:[0-9]{1,3}\\.){3}[0-9]{1,3}\\b")
         private val longToken = Regex("(?i)\\b[0-9a-f]{24,}\\b")
@@ -60,7 +60,6 @@ class MeshDiagnostics(context: Context) {
     fun readForUpload(): String = synchronized(lock) {
         runCatching {
             file.readLines(Charsets.UTF_8)
-                .filter { it.contains("|sid=$sessionId|") }
                 .takeLast(MAX_LINES)
                 .joinToString("\n") { line ->
                 val fields = line.split('|', limit = 6)
