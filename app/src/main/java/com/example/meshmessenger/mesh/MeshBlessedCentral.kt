@@ -78,22 +78,6 @@ class MeshBlessedCentral(
             status: GattStatus
         ) {
             val address = peripheral.address
-            if (characteristic.uuid == rfcommInfoUuid) {
-                if (status != GattStatus.SUCCESS) {
-                    onDiagnostic("BLE_RFCOMM_INFO", "read_failed status=" + status + " address=**" + address.takeLast(5))
-                    return
-                }
-                val info = value.toString(Charsets.UTF_8).split("|", limit = 2)
-                val classicAddress = info.getOrNull(0)?.trim()
-                val peerUuid = info.getOrNull(1)?.trim()?.let { runCatching { UUID.fromString(it) }.getOrNull() }
-                if (classicAddress.isNullOrBlank() || peerUuid == null || !android.bluetooth.BluetoothAdapter.checkBluetoothAddress(classicAddress)) {
-                    onDiagnostic("BLE_RFCOMM_INFO", "invalid value address=**" + address.takeLast(5))
-                    return
-                }
-                onDiagnostic("BLE_RFCOMM_INFO", "received classic=**" + classicAddress.takeLast(5) + " uuid=" + peerUuid)
-                onRfcommPeer(peripheral, classicAddress, peerUuid)
-                return
-            }
             if (characteristic.uuid == allocatorUuid) {
                 val expected = sessionIds[address]
                 val confirmed = status == GattStatus.SUCCESS && expected != null && value.contentEquals(expected)
@@ -286,9 +270,7 @@ class MeshBlessedCentral(
                     "initiator local=" + localId + " peer=" + advertisedNodeId
                 )
                 central.stopScan()
-                onDiagnostic("BLE_RFCOMM", "peer_discovered_via_ble connecting_gatt_for_transport_info address=**" + peripheral.address.takeLast(5))
-                runCatching { central.connectPeripheral(peripheral, peripheralCallback) }
-                    .onFailure { onDiagnostic("BLE_BLESSED_CONNECT", "connect_dispatch_failed error=" + it.javaClass.simpleName) }
+                // BLE is discovery only here. Start the Briar-style insecure RFCOMM connection directly using the discovered Bluetooth address; no custom GATT transport-info characteristic and no GATT connection are required.\n                onDiagnostic("BLE_RFCOMM", "peer_discovered_via_ble direct_connect address=**" + peripheral.address.takeLast(5) + " uuid=" + MeshProtocol.RFCOMM_SERVICE_UUID)\n                onRfcommPeer(peripheral)
             }
 
             override fun onScanFailed(scanFailure: com.welie.blessed.ScanFailure) {
