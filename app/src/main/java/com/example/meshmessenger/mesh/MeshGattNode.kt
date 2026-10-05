@@ -194,21 +194,10 @@ class MeshGattNode(
                         "client_connected address=**" + device.address.takeLast(5) +
                             " peers=" + peers.size + " ready=" + gattReady.size
                     )
-                    // A peer can reach our GATT server before our scanner has
-                    // opened the reciprocal client connection. In that state
-                    // outgoing packets are queued but cannot use the server
-                    // connection until CCCD/notifications are negotiated.
-                    // Open the reciprocal GATT client connection directly from
-                    // the already-known BluetoothDevice so both directions get
-                    // a normal client/server path. Android's BLE API supports
-                    // connecting directly to the remote GATT server with
-                    // connectGatt(false,...).
-                    writeTimeoutExecutor.schedule({
-                        if (!peers.containsKey(device.address) && !connecting.contains(device.address)) {
-                            onDiagnostic("BLE_GATT_CONNECT", "reciprocal_from_server address=**" + device.address.takeLast(5))
-                            connect(device)
-                        }
-                    }, 300L, TimeUnit.MILLISECONDS)
+                    // BLESSED owns the central connection lifecycle. A peripheral-side
+                    // connection is not enough to mark a peer online; wait for the
+                    // application HELLO handshake below.
+                    onDiagnostic("BLE_GATT_SERVER", "waiting_for_hello address=**" + device.address.takeLast(5))
                 } else {
                     serverClients.remove(device.address)
                     peerNodeIds.remove(device.address)
@@ -676,6 +665,7 @@ class MeshGattNode(
                 val peerId = parts[1].trim()
                 if (peerId == localId) return
                 peerNodeIds[from] = peerId
+                blessedCentral.markPeerHello(from)
                 val duplicateAddress = peerNodeIds.entries.firstOrNull { it.value == peerId && it.key != from }?.key
                 if (duplicateAddress != null) {
                     // Same application identity reached us through a rotated BLE
@@ -687,9 +677,15 @@ class MeshGattNode(
                 }
                 val key = runCatching { Base64.getDecoder().decode(parts[3]) }.getOrNull()
                 if (key != null && key.isNotEmpty()) {
+                    // A server-side connection becomes READY only after the peer
+                    // completed the application HELLO handshake. This is the same
+                    // readiness boundary used by the BLESSED central.
+                    gattReady.add(from)
                     peerLastSeenAt[peerId] = System.currentTimeMillis()
+                    onDiagnostic("BLE_GATT_READY", "server_hello=true address=**" + from.takeLast(5))
                     onPeer(peerId, parts[2].ifBlank { peerId.take(8) }, key)
                     onPeerCountChanged(peerCount())
+                    flushQueue()
                 }
             }
             return
@@ -973,17 +969,14 @@ class MeshGattNode(
     }
 
     private fun peerCount(): Int {
-        val now = System.currentTimeMillis()
-        peerLastSeenAt.entries.removeIf { now - it.value > PEER_PRESENCE_TTL_MS }
-        // A live GATT connection is itself proof that BLE is connected, even if
-        // the peer's HELLO/presence packet has not arrived (or has expired).
-        // Count both central and peripheral connections, deduplicated by address.
-        val connectedAddresses = peers.keys.toMutableSet().apply {
-            addAll(serverClients.keys)
+        // Online means application READY, not merely GATT connected. Both sides
+        // reach READY only after the HELLO handshake has completed.
+        val readyAddresses = gattReady.toMutableSet().apply {
             addAll(blessedCentral.readyAddresses())
         }
-        return maxOf(connectedAddresses.size, blessedCentral.connectedCount(),
-            peerLastSeenAt.count { now - it.value <= PEER_PRESENCE_TTL_MS })
+        val uniquePeers = mutableSetOf<String>()
+        for (address in readyAddresses) uniquePeers.add(peerNodeIds[address] ?: address)
+        return uniquePeers.size
     }
 
     fun onlinePeerCount(): Int = peerCount()

@@ -175,8 +175,8 @@ class MeshRelayTransport(
         when (msg.optString("type")) {
             "hello_required" -> Unit
             "welcome" -> {
-                onDiagnostic("RELAY_WELCOME", "state=received")
                 val list = msg.optJSONArray("peers")
+                onDiagnostic("RELAY_WELCOME", "state=received peers=" + (list?.length() ?: 0))
                 if (list != null) for (i in 0 until list.length()) {
                     val p = list.optJSONObject(i) ?: continue
                     rememberPeer(p.optString("nodeId"), p.optString("name"), p.optString("publicKey"))
@@ -238,6 +238,7 @@ class MeshRelayTransport(
         }
         val safeName = name.ifBlank { id.take(8) }
         peers[id] = PeerInfo(safeName, key)
+        onDiagnostic("RELAY_PEER", "state=online node=" + id.takeLast(8))
         onPeer(id, safeName, key, "")
         onPeerCount(peers.size)
     }

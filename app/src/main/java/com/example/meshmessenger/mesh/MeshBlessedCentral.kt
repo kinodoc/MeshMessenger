@@ -28,6 +28,7 @@ class MeshBlessedCentral(
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private val connected = LinkedHashMap<String, BluetoothPeripheral>()
+    private val helloWriteSucceeded = mutableSetOf<String>()
     private val ready = mutableSetOf<String>()
     private val peripheralCallback = object : BluetoothPeripheralCallback() {
         override fun onServicesDiscovered(peripheral: BluetoothPeripheral) {
@@ -89,8 +90,8 @@ class MeshBlessedCentral(
                 " address=**" + address.takeLast(5))
             if (value.contentEquals(helloPayload())) {
                 if (ok) {
-                    ready.add(address)
-                    onReady(address, true)
+                    helloWriteSucceeded.add(address)
+                    onDiagnostic("BLE_BLESSED_HELLO", "write_success_waiting_for_peer_hello address=**" + address.takeLast(5))
                 } else {
                     onReady(address, false)
                 }
@@ -127,6 +128,7 @@ class MeshBlessedCentral(
                 val address = peripheral.address
                 connected.remove(address)
                 ready.remove(address)
+                helloWriteSucceeded.remove(address)
                 onReady(address, false)
                 onDiagnostic("BLE_BLESSED_CONNECT", "disconnected status=" + status +
                     " address=**" + address.takeLast(5))
@@ -165,6 +167,15 @@ class MeshBlessedCentral(
         }
     }
 
+    fun markPeerHello(address: String) {
+        if (!connected.containsKey(address) || !helloWriteSucceeded.contains(address)) return
+        if (ready.add(address)) {
+            onDiagnostic("BLE_BLESSED_READY", "peer_hello=true address=**" + address.takeLast(5))
+            onReady(address, true)
+            handler.postDelayed({ startScan() }, 300L)
+        }
+    }
+
     fun write(address: String, bytes: ByteArray): Boolean {
         val peripheral = connected[address] ?: return false
         if (!ready.contains(address)) return false
@@ -180,6 +191,7 @@ class MeshBlessedCentral(
         central.stopScan()
         connected.values.toList().forEach { runCatching { it.cancelConnection() } }
         connected.clear()
+        helloWriteSucceeded.clear()
         ready.clear()
         onDiagnostic("BLE_BLESSED", "stopped")
         central.close()
