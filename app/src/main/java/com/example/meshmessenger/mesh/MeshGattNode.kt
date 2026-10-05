@@ -39,20 +39,12 @@ class MeshGattNode(
     private var server: BluetoothGattServer? = null
     @Volatile private var gattServerReady = false
     @Volatile private var advertisingStarted = false
-    @Volatile private var scanningStarted = false
     private var advertiser: BluetoothLeAdvertiser? = null
     private var advertiseCallback: AdvertiseCallback? = null
-    private var scanner: BluetoothLeScanner? = null
-    private var scanCallback: ScanCallback? = null
     // Lightweight counters distinguish missing scan callbacks from a service UUID mismatch.
-    private var scanResultCount = 0
-    private var scanMatchCount = 0
-    private val peers = mutableMapOf<String, BluetoothGatt>()
     private val serverClients = mutableMapOf<String, BluetoothDevice>()
-    private val connecting = mutableSetOf<String>()
     // BLE MAC addresses may rotate. Track the application's stable Node ID too,
     // so one physical peer cannot create several GATT connections/counts.
-    private val connectingNodeIds = ConcurrentHashMap.newKeySet<String>()
     private val peerNodeIds = ConcurrentHashMap<String, String>()
     // Presence is keyed by the stable Mesh Node ID, not by BLE address or GATT connection.
     // A phone may advertise many times and may rotate its BLE address; it is still one peer.
@@ -60,7 +52,6 @@ class MeshGattNode(
     // CCCD enabled is not the same as application-ready: HELLO must also complete.
     private val notifyReady = mutableSetOf<String>()
     private val gattReady = mutableSetOf<String>()
-    private val reconnectBlockedUntil = ConcurrentHashMap<String, Long>()
     private val service = MeshProtocol.SERVICE_UUID
     private val rx = MeshProtocol.RX_UUID
     private val tx = MeshProtocol.TX_UUID
@@ -128,7 +119,6 @@ class MeshGattNode(
         private const val GATT_WRITE_TIMEOUT_MS = 5_000L
         private const val GATT_MTU_TIMEOUT_MS = 3_500L
         private const val PEER_PRESENCE_TTL_MS = 30_000L
-        private const val CONNECT_RETRY_COOLDOWN_MS = 5_000L
     }
 
     private data class Assembly(
@@ -141,15 +131,10 @@ class MeshGattNode(
     private data class WriteTask(val messageId: UUID, val fragments: List<ByteArray>)
     private val writeQueues = mutableMapOf<String, ArrayDeque<WriteTask>>()
     private val writing = mutableSetOf<String>()
-    private val helloWriting = mutableSetOf<String>()
     private val writeTimeouts = ConcurrentHashMap<String, ScheduledFuture<*>>()
-    private val helloWriteTimeouts = ConcurrentHashMap<String, ScheduledFuture<*>>()
-    private val mtuTimeouts = ConcurrentHashMap<String, ScheduledFuture<*>>()
-    private val serviceDiscoveryStarted = mutableSetOf<String>()
     // Android 11/OEM GATT stacks can return a successful discovery callback while
     // serving a stale cached service table. Retry one discovery after refreshing
     // the hidden GATT cache before declaring the peer incompatible.
-    private val serviceCacheRefreshAttempts = ConcurrentHashMap<String, Int>()
     private val writeTimeoutExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor { runnable ->
             Thread(runnable, "MeshGattWriteTimeout").apply { isDaemon = true }
@@ -192,7 +177,7 @@ class MeshGattNode(
                     onDiagnostic(
                         "BLE_GATT_SERVER",
                         "client_connected address=**" + device.address.takeLast(5) +
-                            " peers=" + peers.size + " ready=" + gattReady.size
+                            " server_clients=" + serverClients.size + " ready=" + gattReady.size
                     )
                     // BLESSED owns the central connection lifecycle. A peripheral-side
                     // connection is not enough to mark a peer online; wait for the
@@ -238,7 +223,7 @@ class MeshGattNode(
 
     @SuppressLint("MissingPermission")
     private fun startBleAdvertisingAndScan() {
-        if (advertiser != null || scanner != null) return
+        if (advertiser != null) return
 
         advertiser = adapter.bluetoothLeAdvertiser
         val adv = advertiser ?: run { onStatus("BLE advertising недоступен"); return }
@@ -311,339 +296,6 @@ class MeshGattNode(
         blessedCentral.start()
         onDiagnostic("BLE_BLESSED", "central_transport_enabled")
         return
-
-        scanner = adapter.bluetoothLeScanner
-        val bleScanner = scanner ?: run {
-            onStatus("BLE scan недоступен")
-            return
-        }
-        val scanSettings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
-            .build()
-
-        scanCallback = object : ScanCallback() {
-            override fun onScanResult(callbackType: Int, result: ScanResult) {
-                scanResultCount++
-                val record = result.scanRecord
-                val uuids = record?.serviceUuids.orEmpty()
-                val matchesService = uuids.any { it.uuid == service }
-                if (matchesService) scanMatchCount++
-                // Aggregate periodically instead of logging every nearby device.
-                if (scanResultCount == 1 || scanResultCount % 25 == 0) {
-                    val serviceDataBytes = record?.getServiceData(ParcelUuid(service))?.size ?: 0
-                    onDiagnostic(
-                        "BLE_SCAN",
-                        "results=$scanResultCount matches=$scanMatchCount last_rssi=${result.rssi} " +
-                            "uuid_count=${uuids.size} service_uuid=$matchesService service_data_bytes=$serviceDataBytes"
-                    )
-                }
-                if (!matchesService) return
-                onDiagnostic("BLE_SCAN_MATCH", "rssi=${result.rssi},address=**" + result.device.address.takeLast(5))
-                val advertisedNodeId = record?.getServiceData(ParcelUuid(service))
-                    ?.joinToString("") { "%02x".format(it.toInt() and 0xff) }
-                    ?.takeIf { it.length == 16 }
-                if (advertisedNodeId == localId) return
-                connect(result.device, advertisedNodeId?.takeIf { it.isNotBlank() })
-            }
-            override fun onScanFailed(errorCode: Int) {
-                scanningStarted = false
-                onDiagnostic("BLE_SCAN", "failed code=" + errorCode)
-                onStatus("BLE scan error: " + errorCode)
-            }
-        }
-        runCatching { bleScanner.startScan(null, scanSettings, scanCallback) }
-            .onSuccess { scanningStarted = true; onDiagnostic("BLE_SCAN", "started mode=BALANCED") }
-            .onFailure { onDiagnostic("BLE_SCAN", "start_exception=" + it.javaClass.simpleName) }
-    }
-
-    @SuppressLint("MissingPermission")
-    fun connect(device: BluetoothDevice, advertisedNodeId: String? = null) {
-        if (Build.VERSION.SDK_INT >= 31 && context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
-        val stableId = advertisedNodeId?.trim().orEmpty()
-        val blockedUntil = reconnectBlockedUntil[device.address] ?: 0L
-        if (blockedUntil > System.currentTimeMillis()) return
-        if (blockedUntil != 0L) reconnectBlockedUntil.remove(device.address)
-        if (device.address == adapter.address ||
-            peers.containsKey(device.address) ||
-            connecting.contains(device.address) ||
-            (stableId.isNotBlank() && (peerNodeIds.values.contains(stableId) || !connectingNodeIds.add(stableId)))) return
-        connecting.add(device.address)
-        onDiagnostic("BLE_GATT_CONNECT", "start address=**" + device.address.takeLast(5) + ",node=" + stableId)
-        val callback = object : BluetoothGattCallback() {
-            override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
-                onDiagnostic("BLE_GATT_STATE", "address=**" + device.address.takeLast(5) + ",status=" + status + ",state=" + newState)
-                if (newState == BluetoothProfile.STATE_CONNECTED && status != BluetoothGatt.GATT_SUCCESS) {
-                    onDiagnostic("BLE_GATT_CONNECT", "connected_with_error status=$status; disconnecting")
-                    g.disconnect()
-                    return
-                }
-                if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    reconnectBlockedUntil.remove(device.address)
-                    peers[device.address] = g
-                    onPeerCountChanged(peerCount())
-                    // Android GATT operations must be serialized. Do not call
-                    // discoverServices() while requestMtu() may still be in flight:
-                    // overlapping operations can silently stall service discovery on
-                    // some OEM Bluetooth stacks (including Android 11 devices).
-                    val address = device.address
-                    serviceDiscoveryStarted.remove(address)
-                    serviceCacheRefreshAttempts.remove(address)
-                    val mtuRequested = runCatching { g.requestMtu(247) }.getOrDefault(false)
-                    onDiagnostic("BLE_GATT_SETUP", "connected mtu_request=$mtuRequested")
-                    if (mtuRequested) {
-                        mtuTimeouts.remove(address)?.cancel(false)
-                        mtuTimeouts[address] = writeTimeoutExecutor.schedule({
-                            if (serviceDiscoveryStarted.contains(address)) return@schedule
-                            onDiagnostic("BLE_GATT_MTU_TIMEOUT", "address=**" + address.takeLast(5) + ",timeout_ms=" + GATT_MTU_TIMEOUT_MS)
-                            val discoveryStarted = runCatching { g.discoverServices() }.getOrDefault(false)
-                            if (discoveryStarted) serviceDiscoveryStarted.add(address)
-                            onDiagnostic("BLE_GATT_DISCOVERY", "fallback_after_mtu_timeout=$discoveryStarted")
-                        }, GATT_MTU_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                    } else {
-                        val discoveryStarted = runCatching { g.discoverServices() }.getOrDefault(false)
-                        if (discoveryStarted) serviceDiscoveryStarted.add(address)
-                        onDiagnostic("BLE_GATT_SETUP", "mtu_request_unavailable discover_services=$discoveryStarted")
-                    }
-                } else {
-                    peers.remove(device.address)
-                    if (status != BluetoothGatt.GATT_SUCCESS) {
-                        reconnectBlockedUntil[device.address] = System.currentTimeMillis() + CONNECT_RETRY_COOLDOWN_MS
-                        onDiagnostic("BLE_GATT_RETRY", "cooldown_ms=$CONNECT_RETRY_COOLDOWN_MS,status=$status")
-                    }
-                    connecting.remove(device.address)
-                    if (stableId.isNotBlank()) connectingNodeIds.remove(stableId)
-                    peerNodeIds.remove(device.address)
-                    notifyReady.remove(device.address)
-                    assemblies.remove(device.address)
-                    writeQueues.remove(device.address)
-                    writing.remove(device.address)
-                    helloWriting.remove(device.address)
-                    writeTimeouts.remove(device.address)?.cancel(false)
-                    helloWriteTimeouts.remove(device.address)?.cancel(false)
-                    mtuTimeouts.remove(device.address)?.cancel(false)
-                    serviceDiscoveryStarted.remove(device.address)
-                    serviceCacheRefreshAttempts.remove(device.address)
-                    notificationQueues.remove(device.address)
-                    notifying.remove(device.address)
-                    awaitingDelivery.remove(device.address)
-                    onPeerCountChanged(peerCount())
-                    g.close()
-                }
-            }
-            override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
-                val address = g.device.address
-                mtuTimeouts.remove(address)?.cancel(false)
-                onDiagnostic("BLE_GATT_MTU", "mtu=$mtu,status=$status")
-                if (!serviceDiscoveryStarted.contains(address)) {
-                    val discoveryStarted = runCatching { g.discoverServices() }.getOrDefault(false)
-                    if (discoveryStarted) serviceDiscoveryStarted.add(address)
-                    onDiagnostic("BLE_GATT_SETUP", "after_mtu discover_services=$discoveryStarted")
-                    if (!discoveryStarted) {
-                        onStatus("BLE: не удалось запустить обнаружение GATT-сервисов")
-                    }
-                }
-            }
-            override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
-                val meshService = g.getService(service)
-                onDiagnostic("BLE_GATT_SERVICES", "status=" + status + ",mesh_service=" + (meshService != null))
-                if (status != BluetoothGatt.GATT_SUCCESS) {
-                    if (refreshGattCacheAndRediscover(g, "discovery_status_" + status)) return
-                    onStatus("BLE: ошибка обнаружения сервисов " + status)
-                    g.disconnect()
-                    return
-                }
-                val remoteService = meshService ?: run {
-                    if (refreshGattCacheAndRediscover(g, "mesh_service_missing")) return
-                    onStatus("BLE: сервис Mesh не найден")
-                    g.disconnect()
-                    return
-                }
-                val remoteRx = remoteService.getCharacteristic(rx) ?: run {
-                    onStatus("BLE: RX characteristic не найден")
-                    g.disconnect()
-                    return
-                }
-                val remoteTx = remoteService.getCharacteristic(tx) ?: run {
-                    onStatus("BLE: TX characteristic не найден")
-                    g.disconnect()
-                    return
-                }
-                val notificationEnabled = runCatching {
-                    g.setCharacteristicNotification(remoteTx, true)
-                }.getOrDefault(false)
-                if (!notificationEnabled) {
-                    onDiagnostic("BLE_GATT_NOTIFY", "set_notification_failed")
-                    onStatus("BLE: не удалось включить локальные уведомления")
-                    g.disconnect()
-                    return
-                }
-                val d = remoteTx.getDescriptor(cccd) ?: run {
-                    onDiagnostic("BLE_GATT_NOTIFY", "cccd_missing")
-                    g.disconnect()
-                    return
-                }
-                d.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                val descriptorWriteStarted = runCatching { g.writeDescriptor(d) }.getOrDefault(false)
-                onDiagnostic("BLE_GATT_NOTIFY", "cccd_write_started=$descriptorWriteStarted")
-                if (!descriptorWriteStarted) {
-                    onStatus("BLE: не удалось запустить включение уведомлений")
-                    g.disconnect()
-                    return
-                }
-                peers[device.address] = g
-                flushQueue()
-            }
-            override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-                if (descriptor.uuid != cccd) return
-                onDiagnostic("BLE_GATT_NOTIFY", "descriptor_status=$status")
-                if (status == BluetoothGatt.GATT_SUCCESS) {
-                    notifyReady.add(device.address)
-                    onDiagnostic("BLE_GATT_CCCD", "enabled")
-                    writeHello(g)
-                } else {
-                    onStatus("BLE: не удалось включить уведомления ($status)")
-                    g.disconnect()
-                }
-            }
-            override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
-                Log.d(TAG, "gatt_notify_rx peer=${device.address.takeLast(5)} uuid=${characteristic.uuid} bytes=${value.size} prefix=${value.take(8).joinToString("") { "%02x".format(it) }}")
-                if (characteristic.uuid == tx) handleIncomingFragment(device.address, value)
-            }
-            override fun onCharacteristicWrite(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-                if (characteristic.uuid != rx) return
-                val address = device.address
-                if (helloWriting.remove(address)) {
-                    helloWriteTimeouts.remove(address)?.cancel(false)
-                    if (status != BluetoothGatt.GATT_SUCCESS) {
-                        gattReady.remove(address)
-                        onDiagnostic("BLE_GATT_HELLO", "write_failed status=$status")
-                        onStatus("BLE: HELLO не отправлен")
-                        runCatching { g.disconnect() }
-                    } else {
-                        gattReady.add(address)
-                        onDiagnostic("BLE_GATT_HELLO", "write_success")
-                        onDiagnostic("BLE_GATT_READY", "ready=true")
-                        flushPeerQueue(address)
-                    }
-                    return
-                }
-                writeTimeouts.remove(address)?.cancel(false)
-                if (status != BluetoothGatt.GATT_SUCCESS) {
-                    writing.remove(address)
-                    onStatus("BLE: ошибка записи " + status)
-                    flushPeerQueue(address)
-                    return
-                }
-                val queueForPeer = writeQueues[address]
-                val task = queueForPeer?.firstOrNull()
-                if (task != null) {
-                    val remaining = task.fragments.drop(1)
-                    queueForPeer.removeFirst()
-                    if (remaining.isEmpty()) {
-                        if (queue.snapshot().any { it.id == task.messageId }) {
-                            awaitingDelivery.getOrPut(address) { mutableMapOf() }[task.messageId] = System.currentTimeMillis()
-                        }
-                    } else {
-                        queueForPeer.addFirst(task.copy(fragments = remaining))
-                    }
-                    if (queueForPeer.isEmpty()) writeQueues.remove(address)
-                }
-                writing.remove(address)
-                flushPeerQueue(address)
-            }
-        }
-        // The scan result is a BLE device; force LE transport rather than AUTO.
-        val gatt = runCatching {
-            device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
-        }.onFailure {
-            onDiagnostic("BLE_GATT_CONNECT", "connectGatt_exception=" + it.javaClass.simpleName)
-        }.getOrNull()
-        if (gatt == null) {
-            connecting.remove(device.address)
-            if (stableId.isNotBlank()) connectingNodeIds.remove(stableId)
-            return
-        }
-        // A BluetoothGatt object is not a connected peer until the callback confirms it.
-        // Do not let a pending connect trigger retry/queue logic.
-
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun refreshGattCacheAndRediscover(gatt: BluetoothGatt, reason: String): Boolean {
-        val address = gatt.device.address
-        val attempt = (serviceCacheRefreshAttempts[address] ?: 0) + 1
-        if (attempt > 1) return false
-        serviceCacheRefreshAttempts[address] = attempt
-
-        val refreshed = runCatching {
-            val method = BluetoothGatt::class.java.getMethod("refresh")
-            (method.invoke(gatt) as? Boolean) ?: false
-        }.getOrElse {
-            onDiagnostic(
-                "BLE_GATT_CACHE_REFRESH",
-                "failed address=**" + address.takeLast(5) +
-                    " reason=" + reason + " error=" + it.javaClass.simpleName
-            )
-            false
-        }
-
-        onDiagnostic(
-            "BLE_GATT_CACHE_REFRESH",
-            "attempt=" + attempt + " address=**" + address.takeLast(5) +
-                " reason=" + reason + " refreshed=" + refreshed
-        )
-
-        serviceDiscoveryStarted.remove(address)
-        writeTimeoutExecutor.schedule({
-            if (!peers.containsKey(address)) return@schedule
-            val started = runCatching { gatt.discoverServices() }.getOrDefault(false)
-            if (started) serviceDiscoveryStarted.add(address)
-            onDiagnostic(
-                "BLE_GATT_DISCOVERY",
-                "after_cache_refresh=" + started + " address=**" + address.takeLast(5)
-            )
-        }, 350L, TimeUnit.MILLISECONDS)
-        return true
-    }
-    @SuppressLint("MissingPermission")
-    private fun writeHello(gatt: BluetoothGatt) {
-        val service = gatt.getService(service) ?: return
-        val characteristic = service.getCharacteristic(rx) ?: return
-        val key = Base64.getEncoder().encodeToString(localPublicKey)
-        characteristic.value = listOf(
-            HELLO_MAGIC, localId, localName.take(64), key
-        ).joinToString("|").toByteArray(StandardCharsets.UTF_8)
-        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        val address = gatt.device.address
-        helloWriting.add(address)
-        val started = runCatching {
-            if (Build.VERSION.SDK_INT >= 33) {
-                gatt.writeCharacteristic(
-                    characteristic,
-                    characteristic.value.copyOf(),
-                    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                ) == BluetoothStatusCodes.SUCCESS
-            } else {
-                gatt.writeCharacteristic(characteristic)
-            }
-        }.getOrDefault(false)
-        if (!started) {
-            helloWriting.remove(address)
-            onStatus("BLE: HELLO не отправлен")
-            return
-        }
-        helloWriteTimeouts.remove(address)?.cancel(false)
-        helloWriteTimeouts[address] = writeTimeoutExecutor.schedule({
-            if (!helloWriting.remove(address)) return@schedule
-            onDiagnostic(
-                "BLE_GATT_HELLO_TIMEOUT",
-                "address=**" + address.takeLast(5) + ",timeout_ms=" + GATT_WRITE_TIMEOUT_MS
-            )
-            onStatus("BLE: HELLO завис, переподключение")
-            notifyReady.remove(address)
-            gattReady.remove(address)
-            runCatching { gatt.disconnect() }
-        }, GATT_WRITE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
     }
 
     @SuppressLint("MissingPermission")
@@ -671,7 +323,6 @@ class MeshGattNode(
                     // Same application identity reached us through a rotated BLE
                     // address. Keep the first connection and close this duplicate.
                     onDiagnostic("BLE_DUPLICATE", "node=" + peerId + ",address=**" + from.takeLast(5))
-                    peers[from]?.let { runCatching { it.disconnect() }; runCatching { it.close() } }
                     serverClients[from]?.let { runCatching { server?.cancelConnection(it) } }
                     return
                 }
@@ -815,7 +466,7 @@ class MeshGattNode(
         // The peer-count callback schedules retryPending() when a peer appears;
         // calling it back here creates an infinite main-thread recursion:
         // peer-count -> retryPending -> peer-count -> ...
-        if (peers.isEmpty() && serverClients.isEmpty()) return
+        if (serverClients.isEmpty() && blessedCentral.readyAddresses().isEmpty()) return
         flushQueue()
     }
 
@@ -826,7 +477,7 @@ class MeshGattNode(
         // A peer may exist only on the GATT-server side. The previous code
         // tracked those clients but never sent the durable outgoing queue to them.
         val serverOnly = serverClients.keys.filter {
-            !peers.containsKey(it) && notifyReady.contains(it)
+            notifyReady.contains(it)
         }
 
         for (address in serverOnly) {
@@ -843,9 +494,7 @@ class MeshGattNode(
         }
 
         // Application packets require the complete GATT setup and HELLO handshake.
-        val ready = (peers.keys + blessedCentral.readyAddresses())
-            .filter { gattReady.contains(it) || blessedCentral.readyAddresses().contains(it) }
-            .distinct()
+        val ready = blessedCentral.readyAddresses().toList()
         for (address in ready) {
             for (entry in entries) {
                 val waitingSince = awaitingDelivery[address]?.get(entry.id)
@@ -863,62 +512,26 @@ class MeshGattNode(
 
     @SuppressLint("MissingPermission")
     private fun flushPeerQueue(address: String) {
-        if (writing.contains(address) || helloWriting.contains(address)) return
-        if (!gattReady.contains(address) && !blessedCentral.readyAddresses().contains(address)) return
+        if (writing.contains(address)) return
+        if (!blessedCentral.readyAddresses().contains(address)) return
         val task = writeQueues[address]?.firstOrNull() ?: return
         val part = task.fragments.firstOrNull() ?: return
-        // BLESSED serializes the client-side GATT write queue and handles the
-        // Android stack workarounds. Fall back to the legacy client only when
-        // this address is not owned by BLESSED.
-        if (blessedCentral.readyAddresses().contains(address)) {
-            writing.add(address)
-            val started = blessedCentral.write(address, part)
-            if (!started) {
-                writing.remove(address)
-                onDiagnostic("BLE_BLESSED_WRITE", "start_failed address=**" + address.takeLast(5))
-                return
-            }
-            writeTimeouts.remove(address)?.cancel(false)
-            writeTimeouts[address] = writeTimeoutExecutor.schedule({
-                if (!writing.remove(address)) return@schedule
-                onDiagnostic("BLE_BLESSED_WRITE_TIMEOUT", "address=**" + address.takeLast(5) + ",timeout_ms=" + GATT_WRITE_TIMEOUT_MS)
-                writeQueues.remove(address)
-            }, GATT_WRITE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-            return
-        }
-        val gatt = peers[address] ?: return
-        val characteristic = gatt.getService(service)?.getCharacteristic(rx) ?: return
-        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        characteristic.value = part
+
+        // BLESSED is the sole owner of central-side GATT writes. There is no
+        // legacy BluetoothGatt fallback: having two GATT implementations in
+        // parallel was the source of duplicate connections and status 133.
         writing.add(address)
-        val started = runCatching {
-            if (Build.VERSION.SDK_INT >= 33) {
-                gatt.writeCharacteristic(
-                    characteristic,
-                    part.copyOf(),
-                    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                ) == BluetoothStatusCodes.SUCCESS
-            } else {
-                gatt.writeCharacteristic(characteristic)
-            }
-        }.getOrDefault(false)
+        val started = blessedCentral.write(address, part)
         if (!started) {
             writing.remove(address)
-            onStatus("BLE: запись занята")
+            onDiagnostic("BLE_BLESSED_WRITE", "start_failed address=**" + address.takeLast(5))
             return
         }
-
         writeTimeouts.remove(address)?.cancel(false)
         writeTimeouts[address] = writeTimeoutExecutor.schedule({
             if (!writing.remove(address)) return@schedule
-            onDiagnostic(
-                "BLE_GATT_WRITE_TIMEOUT",
-                "address=**" + address.takeLast(5) + ",timeout_ms=" + GATT_WRITE_TIMEOUT_MS
-            )
-            onStatus("BLE: запись зависла, переподключение")
+            onDiagnostic("BLE_BLESSED_WRITE_TIMEOUT", "address=**" + address.takeLast(5) + ",timeout_ms=" + GATT_WRITE_TIMEOUT_MS)
             writeQueues.remove(address)
-            notifyReady.remove(address)
-            runCatching { gatt.disconnect() }
         }, GATT_WRITE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
     }
 
@@ -933,7 +546,7 @@ class MeshGattNode(
     @SuppressLint("MissingPermission")
     private fun flushNotificationQueue(address: String) {
         if (notifying.contains(address) || !notifyReady.contains(address)) return
-        val device = peers[address]?.device ?: serverClients[address] ?: return
+        val device = serverClients[address] ?: return
         val bytes = notificationQueues[address]?.firstOrNull() ?: return
         val srv = server ?: return
         val characteristic = txCharacteristic
@@ -960,7 +573,6 @@ class MeshGattNode(
     private fun broadcast(bytes: ByteArray, except: String? = null) {
         val fragments = runCatching { fragment(bytes) }.getOrNull() ?: return
         val devices = LinkedHashMap<String, BluetoothDevice>()
-        for ((address, gatt) in peers.toMap()) devices[address] = gatt.device
         for ((address, device) in serverClients.toMap()) devices[address] = device
         for ((address, device) in devices) {
             if (address == except || !notifyReady.contains(address)) continue
@@ -994,21 +606,9 @@ class MeshGattNode(
     fun stop() {
         gattServerReady = false
         advertisingStarted = false
-        scanningStarted = false
         // Android may turn the adapter off before the watchdog calls stop().
         // BLE scanner APIs throw IllegalStateException in that state; shutdown
         // must remain best-effort and must never crash the process.
-        if (runCatching { adapter.isEnabled }.getOrDefault(false)) {
-            scanner?.let { sc ->
-                scanCallback?.let { cb ->
-                    runCatching { sc.stopScan(cb) }
-                        .onFailure { onDiagnostic("BLE_SCAN", "stop_failed ${it.javaClass.simpleName}") }
-                }
-            }
-        }
-        scanCallback = null
-        scanner = null
-        scanningStarted = false
         val adv = advertiser
         val callback = advertiseCallback
         if (adv != null && callback != null && runCatching { adapter.isEnabled }.getOrDefault(false)) {
@@ -1020,28 +620,17 @@ class MeshGattNode(
         advertiser = null
         advertisingStarted = false
         runCatching { blessedCentral.stop() }
-        peers.values.forEach { runCatching { it.close() } }
-        peers.clear()
         serverClients.clear()
-        connecting.clear()
-        connectingNodeIds.clear()
         peerNodeIds.clear()
         peerLastSeenAt.clear()
         notifyReady.clear()
         gattReady.clear()
-        reconnectBlockedUntil.clear()
         notificationQueues.clear()
         notifying.clear()
         awaitingDelivery.clear()
         assemblies.clear()
         writeTimeouts.values.forEach { it.cancel(false) }
-        helloWriteTimeouts.values.forEach { it.cancel(false) }
-        mtuTimeouts.values.forEach { it.cancel(false) }
         writeTimeouts.clear()
-        helloWriteTimeouts.clear()
-        mtuTimeouts.clear()
-        serviceDiscoveryStarted.clear()
-        serviceCacheRefreshAttempts.clear()
         onPeerCountChanged(0)
         server?.close()
         server = null
