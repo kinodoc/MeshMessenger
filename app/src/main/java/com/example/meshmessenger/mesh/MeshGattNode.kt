@@ -79,6 +79,7 @@ class MeshGattNode(
         private const val REASSEMBLY_TIMEOUT_MS = 30_000L
         private const val DELIVERY_RETRY_MS = 10_000L
         private const val GATT_WRITE_TIMEOUT_MS = 5_000L
+        private const val GATT_MTU_TIMEOUT_MS = 3_500L
         private const val PEER_PRESENCE_TTL_MS = 30_000L
         private const val CONNECT_RETRY_COOLDOWN_MS = 5_000L
     }
@@ -96,6 +97,8 @@ class MeshGattNode(
     private val helloWriting = mutableSetOf<String>()
     private val writeTimeouts = ConcurrentHashMap<String, ScheduledFuture<*>>()
     private val helloWriteTimeouts = ConcurrentHashMap<String, ScheduledFuture<*>>()
+    private val mtuTimeouts = ConcurrentHashMap<String, ScheduledFuture<*>>()
+    private val serviceDiscoveryStarted = mutableSetOf<String>()
     private val writeTimeoutExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor { runnable ->
             Thread(runnable, "MeshGattWriteTimeout").apply { isDaemon = true }
@@ -316,10 +319,22 @@ class MeshGattNode(
                     // discoverServices() while requestMtu() may still be in flight:
                     // overlapping operations can silently stall service discovery on
                     // some OEM Bluetooth stacks (including Android 11 devices).
+                    val address = device.address
+                    serviceDiscoveryStarted.remove(address)
                     val mtuRequested = runCatching { g.requestMtu(247) }.getOrDefault(false)
                     onDiagnostic("BLE_GATT_SETUP", "connected mtu_request=$mtuRequested")
-                    if (!mtuRequested) {
+                    if (mtuRequested) {
+                        mtuTimeouts.remove(address)?.cancel(false)
+                        mtuTimeouts[address] = writeTimeoutExecutor.schedule({
+                            if (serviceDiscoveryStarted.contains(address)) return@schedule
+                            onDiagnostic("BLE_GATT_MTU_TIMEOUT", "address=**" + address.takeLast(5) + ",timeout_ms=" + GATT_MTU_TIMEOUT_MS)
+                            val discoveryStarted = runCatching { g.discoverServices() }.getOrDefault(false)
+                            if (discoveryStarted) serviceDiscoveryStarted.add(address)
+                            onDiagnostic("BLE_GATT_DISCOVERY", "fallback_after_mtu_timeout=$discoveryStarted")
+                        }, GATT_MTU_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                    } else {
                         val discoveryStarted = runCatching { g.discoverServices() }.getOrDefault(false)
+                        if (discoveryStarted) serviceDiscoveryStarted.add(address)
                         onDiagnostic("BLE_GATT_SETUP", "mtu_request_unavailable discover_services=$discoveryStarted")
                     }
                 } else {
@@ -338,6 +353,8 @@ class MeshGattNode(
                     helloWriting.remove(device.address)
                     writeTimeouts.remove(device.address)?.cancel(false)
                     helloWriteTimeouts.remove(device.address)?.cancel(false)
+                    mtuTimeouts.remove(device.address)?.cancel(false)
+                    serviceDiscoveryStarted.remove(device.address)
                     notificationQueues.remove(device.address)
                     notifying.remove(device.address)
                     awaitingDelivery.remove(device.address)
@@ -346,14 +363,16 @@ class MeshGattNode(
                 }
             }
             override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+                val address = g.device.address
+                mtuTimeouts.remove(address)?.cancel(false)
                 onDiagnostic("BLE_GATT_MTU", "mtu=$mtu,status=$status")
-                // Continue the GATT setup sequence only after the MTU operation
-                // has completed. Even a failed MTU negotiation still permits
-                // service discovery using the default MTU.
-                val discoveryStarted = runCatching { g.discoverServices() }.getOrDefault(false)
-                onDiagnostic("BLE_GATT_SETUP", "after_mtu discover_services=$discoveryStarted")
-                if (!discoveryStarted) {
-                    onStatus("BLE: не удалось запустить обнаружение GATT-сервисов")
+                if (!serviceDiscoveryStarted.contains(address)) {
+                    val discoveryStarted = runCatching { g.discoverServices() }.getOrDefault(false)
+                    if (discoveryStarted) serviceDiscoveryStarted.add(address)
+                    onDiagnostic("BLE_GATT_SETUP", "after_mtu discover_services=$discoveryStarted")
+                    if (!discoveryStarted) {
+                        onStatus("BLE: не удалось запустить обнаружение GATT-сервисов")
+                    }
                 }
             }
             override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
@@ -879,8 +898,11 @@ class MeshGattNode(
         assemblies.clear()
         writeTimeouts.values.forEach { it.cancel(false) }
         helloWriteTimeouts.values.forEach { it.cancel(false) }
+        mtuTimeouts.values.forEach { it.cancel(false) }
         writeTimeouts.clear()
         helloWriteTimeouts.clear()
+        mtuTimeouts.clear()
+        serviceDiscoveryStarted.clear()
         onPeerCountChanged(0)
         server?.close()
         server = null
