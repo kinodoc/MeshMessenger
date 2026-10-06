@@ -4,6 +4,6 @@ MeshMessenger
 
 Версия задаётся в `app/build.gradle.kts` и отображается внутри приложения под Node ID.
 
-APK релизов публикуется через GitHub Actions workflow `Release Android APK` при создании Git-тега `v*`.
+Версия APK собирается через GitHub Actions.
 
-CI release trigger: 2026-10-06.
+BLE clean GATT rebuild trigger: 2026-10-06T02:00Z.
