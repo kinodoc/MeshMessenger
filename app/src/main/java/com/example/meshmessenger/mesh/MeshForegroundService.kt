@@ -429,7 +429,6 @@ class MeshForegroundService : Service() {
         chats.updateDelivery(packetId, ChatStore.Delivery.DELIVERED)
         diagnostics.event("DELIVERY_STATUS", "delivered=$packetId")
         sendBroadcast(Intent(ACTION_MESH_DELIVERED).apply {
-        sendBroadcast(Intent(ACTION_MESH_DELIVERED).apply {
             setPackage(packageName)
             putExtra(EXTRA_DELIVERED_PACKET_ID, packetId)
         })
