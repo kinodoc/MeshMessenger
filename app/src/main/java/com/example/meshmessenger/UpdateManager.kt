@@ -52,8 +52,6 @@ class UpdateManager(private val context: Context) {
     }
     companion object {
         private const val UPDATE_URL = "https://194.87.186.159/mesh-update/update.json"
-        private const val RELEASES_URL = "https://api.github.com/repos/kinodoc/MeshMessenger/releases/latest"
-        private const val RELEASE_PAGE_URL = "https://github.com/kinodoc/MeshMessenger/releases/latest"
         private const val APK_PREFIX = "MeshMessenger"
     }
 
@@ -62,9 +60,6 @@ class UpdateManager(private val context: Context) {
     fun check(onResult: (Result<ReleaseInfo?>) -> Unit) {
         Thread {
             val result = runCatching { fetchLatestFromVps() }
-                .recoverCatching { fetchLatestFromApi() }
-                .recoverCatching { fetchLatestFromGitHubPage() }
-                .recoverCatching { fetchLatestFromRedirect() }
             Handler(Looper.getMainLooper()).post { onResult(result) }
         }.start()
     }
@@ -92,7 +87,7 @@ class UpdateManager(private val context: Context) {
         }
     }
 
-    private fun fetchLatestFromApi(): ReleaseInfo? {
+    /* GitHub fallback removed: updates are served only by the VPS.\n    private fun fetchLatestFromApi(): ReleaseInfo? {
         val connection = openHttpConnection(RELEASES_URL).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -165,7 +160,7 @@ class UpdateManager(private val context: Context) {
         }
     }
 
-    fun isNewer(release: ReleaseInfo): Boolean = release.versionCode?.let { it > BuildConfig.VERSION_CODE }
+    */\n\n    fun isNewer(release: ReleaseInfo): Boolean = release.versionCode?.let { it > BuildConfig.VERSION_CODE }
         ?: (compareVersions(release.version, BuildConfig.VERSION_NAME) > 0)
 
     private fun compareVersions(a: String, b: String): Int {
@@ -188,7 +183,7 @@ class UpdateManager(private val context: Context) {
                     readTimeout = 30000
                     setRequestProperty("User-Agent", "MeshMessenger")
                 }
-                if (connection.responseCode !in 200..299) error("GitHub: HTTP ${connection.responseCode}")
+                if (connection.responseCode !in 200..299) error("VPS: HTTP ${connection.responseCode}")
                 val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
                     ?: error("Не удалось открыть каталог загрузок")
                 dir.mkdirs()
