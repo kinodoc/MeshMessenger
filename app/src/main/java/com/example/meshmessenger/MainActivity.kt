@@ -374,9 +374,7 @@ class MainActivity : ComponentActivity() {
 
             // Perspective cross-lines. z grows exponentially, so the near field opens up
             // strongly while the horizon remains dense and distant.
-            val speed = 0.018f
-            val maxZ = 1f
-            val phase01 = (phase / (Math.PI.toFloat() * 2f) * speed) % 1f
+            val phase01 = phase / (Math.PI.toFloat() * 2f)
             for (i in 0..22) {
                 val u = (i / 22f + phase01) % 1f
                 val depth = 0.035f + u * u * 0.965f
