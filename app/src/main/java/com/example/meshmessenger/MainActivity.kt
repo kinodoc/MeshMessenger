@@ -262,8 +262,8 @@ class MainActivity : ComponentActivity() {
         }
         scroll.addView(root)
         val rootBackground = FrameLayout(this).apply {
-            setBackgroundColor(Color.rgb(2, 8, 19))
-            addView(TronVideoBackgroundView(this@MainActivity), FrameLayout.LayoutParams(-1, -1))
+            setBackgroundColor(Color.BLACK)
+            
             addView(scroll, FrameLayout.LayoutParams(-1, -1))
         }
 
@@ -418,7 +418,7 @@ class MainActivity : ComponentActivity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(22), dp(20), dp(24))
-            setBackgroundColor(Color.rgb(2, 8, 19))
+            setBackgroundColor(Color.BLACK)
         }
         root.addView(TextView(this).apply {
             text = "ОТПРАВКА БАГРЕПОРТА"
@@ -1108,8 +1108,8 @@ class MainActivity : ComponentActivity() {
         root.addView(inputRow)
 
         val chatFrame = FrameLayout(this).apply {
-            setBackgroundColor(Color.rgb(2, 8, 19))
-            addView(TronVideoBackgroundView(this@MainActivity), FrameLayout.LayoutParams(-1, -1))
+            setBackgroundColor(Color.BLACK)
+            
             addView(root, FrameLayout.LayoutParams(-1, -1))
         }
 
