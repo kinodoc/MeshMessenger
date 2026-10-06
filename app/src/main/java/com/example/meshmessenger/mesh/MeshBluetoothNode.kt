@@ -62,7 +62,12 @@ class MeshBluetoothNode(
         override fun onReceive(context: Context?, intent: Intent?) {
             if (!running) return
             val action = intent?.action ?: return
-            if (action != BluetoothDevice.ACTION_FOUND && action != BluetoothDevice.ACTION_ACL_CONNECTED) return
+            if (action != BluetoothDevice.ACTION_FOUND && action != BluetoothDevice.ACTION_ACL_CONNECTED && action != BluetoothAdapter.ACTION_DISCOVERY_FINISHED) return
+            if (action == BluetoothAdapter.ACTION_DISCOVERY_FINISHED) {
+                onDiagnostic("BT_DISCOVERY", "finished")
+                handler.postDelayed({ if (running) startDiscovery() }, 250L)
+                return
+            }
             val device = deviceFromIntent(intent) ?: return
             if (device.address == adapter.address) return
             onDiagnostic("BT_DISCOVERY", "found name=" + runCatching { device.name }.getOrNull().orEmpty().take(32) + " address=**" + device.address.takeLast(5))
@@ -120,7 +125,7 @@ class MeshBluetoothNode(
     private fun registerReceiver() {
         if (receiverRegistered) return
         ContextCompat.registerReceiver(
-            context, receiver, IntentFilter().apply { addAction(BluetoothDevice.ACTION_FOUND); addAction(BluetoothDevice.ACTION_ACL_CONNECTED) },
+            context, receiver, IntentFilter().apply { addAction(BluetoothDevice.ACTION_FOUND); addAction(BluetoothDevice.ACTION_ACL_CONNECTED); addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED) },
             ContextCompat.RECEIVER_EXPORTED
         )
         receiverRegistered = true
@@ -265,4 +270,13 @@ class MeshBluetoothNode(
         } else {
             intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
         }
-}
+    private fun startDiscovery() {
+        if (!running || !adapter.isEnabled) return
+        if (runCatching { adapter.isDiscovering }.getOrDefault(false)) {
+            onDiagnostic("BT_DISCOVERY", "already_active")
+            return
+        }
+        val started = runCatching { adapter.startDiscovery() }.getOrDefault(false)
+        onDiagnostic("BT_DISCOVERY", "start=" + started)
+        if (!started) handler.postDelayed({ if (running) startDiscovery() }, 1500L)
+    }
