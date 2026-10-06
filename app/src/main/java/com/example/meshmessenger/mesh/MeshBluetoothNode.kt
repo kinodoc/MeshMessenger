@@ -109,7 +109,18 @@ class MeshBluetoothNode(
     private fun startDiscovery() {
         if (!running || !adapter.isEnabled) return
         runCatching { adapter.cancelDiscovery() }
-        onDiagnostic("BT_DISCOVERY", "start=\${runCatching { adapter.startDiscovery() }.getOrDefault(false)}")
+        val started = runCatching { adapter.startDiscovery() }.getOrDefault(false)
+        onDiagnostic("BT_DISCOVERY", "start=$started")
+        runCatching {
+            adapter.bondedDevices.forEach { device ->
+                if (device.address != adapter.address) {
+                    onDiagnostic("BT_DISCOVERY", "bonded_connect address=**" + device.address.takeLast(5))
+                    rfcomm.connect(device.address, MeshProtocol.RFCOMM_SERVICE_UUID)
+                }
+            }
+        }.onFailure {
+            onDiagnostic("BT_DISCOVERY", "bonded_scan_failed=" + it.javaClass.simpleName)
+        }
     }
 
     private fun helloPayload(): ByteArray {
