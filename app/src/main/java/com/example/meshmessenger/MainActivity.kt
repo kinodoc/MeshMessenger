@@ -195,33 +195,24 @@ class MainActivity : ComponentActivity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private class TronBackgroundView(context: Context) : android.view.View(context) {
-        private val density = resources.displayMetrics.density
         private var phase = 0f
         private val tick = object : Runnable {
             override fun run() {
-                phase = (phase + 0.035f) % (Math.PI.toFloat() * 2f)
+                phase = (phase + 0.022f) % (Math.PI.toFloat() * 2f)
                 invalidate()
-                postDelayed(this, 45L)
+                postDelayed(this, 33L)
             }
         }
 
-        override fun onAttachedToWindow() {
-            super.onAttachedToWindow()
-            post(tick)
-        }
+        override fun onAttachedToWindow() { super.onAttachedToWindow(); post(tick) }
+        override fun onDetachedFromWindow() { removeCallbacks(tick); super.onDetachedFromWindow() }
 
-        override fun onDetachedFromWindow() {
-            removeCallbacks(tick)
-            super.onDetachedFromWindow()
+        private fun paint(alpha: Int, width: Float): Paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(0, 205, 250)
+            this.alpha = alpha
+            strokeWidth = width * resources.displayMetrics.density
+            style = Paint.Style.STROKE
         }
-
-        private fun linePaint(alpha: Int, width: Float): Paint =
-            Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.rgb(0, 185, 245)
-                this.alpha = alpha
-                strokeWidth = width * density
-                style = Paint.Style.STROKE
-            }
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
@@ -229,190 +220,100 @@ class MainActivity : ComponentActivity() {
             val h = height.toFloat()
             if (w <= 0f || h <= 0f) return
 
-            canvas.drawColor(Color.rgb(1, 5, 13))
+            canvas.drawColor(Color.rgb(0, 3, 8))
+            val horizonY = h * 0.505f
+            val cx = w * 0.5f
 
-            // Deep blue-black sky with a restrained cinematic glow.
             val sky = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                shader = android.graphics.RadialGradient(
-                    w * 0.5f, h * 0.48f, w * 0.72f,
-                    intArrayOf(
-                        Color.rgb(7, 30, 48),
-                        Color.rgb(2, 12, 23),
-                        Color.rgb(1, 5, 13)
-                    ),
-                    floatArrayOf(0f, 0.48f, 1f),
+                shader = android.graphics.LinearGradient(
+                    0f, 0f, 0f, horizonY,
+                    intArrayOf(Color.rgb(0, 2, 7), Color.rgb(1, 8, 15), Color.rgb(3, 28, 40)),
+                    floatArrayOf(0f, 0.72f, 1f),
                     android.graphics.Shader.TileMode.CLAMP
                 )
             }
-            canvas.drawRect(0f, 0f, w, h, sky)
+            canvas.drawRect(0f, 0f, w, horizonY + 2f, sky)
 
-            val horizonY = h * 0.49f
             val horizonGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 shader = android.graphics.LinearGradient(
-                    0f, horizonY - 45f * density, 0f, horizonY + 35f * density,
-                    intArrayOf(
-                        Color.TRANSPARENT,
-                        Color.argb(65, 0, 135, 205),
-                        Color.argb(25, 0, 205, 255),
-                        Color.TRANSPARENT
-                    ),
-                    floatArrayOf(0f, 0.45f, 0.62f, 1f),
+                    0f, horizonY - 70f, 0f, horizonY + 55f,
+                    intArrayOf(Color.TRANSPARENT, Color.argb(35, 0, 150, 205), Color.argb(95, 0, 225, 255), Color.TRANSPARENT),
+                    floatArrayOf(0f, 0.42f, 0.60f, 1f),
                     android.graphics.Shader.TileMode.CLAMP
                 )
             }
-            canvas.drawRect(0f, horizonY - 50f * density, w, horizonY + 45f * density, horizonGlow)
+            canvas.drawRect(0f, horizonY - 70f, w, horizonY + 55f, horizonGlow)
 
-            // TRON-like city: many different towers, layered depth, luminous architectural edges.
-            val cityBase = horizonY + 7f * density
-            val silhouette = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.rgb(1, 8, 16)
-                style = Paint.Style.FILL
-            }
-            val rearEdge = linePaint(90, 0.65f)
-            val frontEdge = linePaint(155, 0.9f)
-            val windowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.rgb(0, 190, 235)
-                strokeWidth = 0.7f * density
-                alpha = 95
+            // Low, dense side-city from the reference: the center stays open.
+            val cityBase = horizonY + 8f
+            val cityFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0, 6, 12) }
+            val cityEdge = paint(105, 0.62f)
+            val cityBright = paint(145, 0.82f)
+
+            fun block(x: Float, width: Float, height: Float, bright: Boolean) {
+                val left = x * w
+                val right = (x + width) * w
+                val top = cityBase - height * h
+                canvas.drawRect(left, top, right, cityBase, cityFill)
+                canvas.drawRect(left, top, right, cityBase, if (bright) cityBright else cityEdge)
+                val bands = maxOf(2, (height * 18f).toInt())
+                for (i in 1 until bands) {
+                    val y = top + (cityBase - top) * i / bands
+                    canvas.drawLine(left + (right-left)*0.12f, y, right - (right-left)*0.08f, y, cityEdge)
+                }
+                if (height > 0.18f) {
+                    canvas.drawLine(left + (right-left)*0.5f, top, left + (right-left)*0.5f, top + (cityBase-top)*0.8f, cityEdge)
+                }
             }
 
-            data class Tower(val x: Float, val width: Float, val height: Float, val tier: Int, val crown: Boolean)
-            val towers = listOf(
-                Tower(0.00f, .085f, .12f, 1, false),
-                Tower(0.075f, .055f, .20f, 2, true),
-                Tower(0.125f, .095f, .14f, 1, false),
-                Tower(0.215f, .060f, .27f, 3, true),
-                Tower(0.270f, .115f, .17f, 2, false),
-                Tower(0.375f, .065f, .34f, 4, true),
-                Tower(0.435f, .095f, .21f, 2, false),
-                Tower(0.515f, .070f, .42f, 5, true),
-                Tower(0.580f, .110f, .18f, 2, false),
-                Tower(0.685f, .060f, .30f, 3, true),
-                Tower(0.740f, .105f, .15f, 1, false),
-                Tower(0.840f, .070f, .25f, 3, true),
-                Tower(0.900f, .100f, .19f, 2, false)
+            val blocks = arrayOf(
+                floatArrayOf(0.00f,0.075f,0.13f), floatArrayOf(0.065f,0.10f,0.21f),
+                floatArrayOf(0.145f,0.075f,0.16f), floatArrayOf(0.205f,0.115f,0.25f),
+                floatArrayOf(0.305f,0.08f,0.19f), floatArrayOf(0.37f,0.095f,0.29f),
+                floatArrayOf(0.43f,0.07f,0.16f)
             )
-
-            fun drawTower(t: Tower, edge: Paint, detail: Boolean) {
-                val x = t.x * w
-                val tw = t.width * w
-                val top = cityBase - t.height * h
-                canvas.drawRect(x, top, x + tw, cityBase, silhouette)
-                if (t.tier >= 3) {
-                    val step = tw * 0.18f
-                    canvas.drawRect(x + step, top + t.height * h * 0.10f, x + tw - step, top + t.height * h * 0.30f, silhouette)
-                }
-                if (t.crown) {
-                    canvas.drawLine(x + tw * 0.18f, top, x + tw * 0.50f, top - 0.045f * h, edge)
-                    canvas.drawLine(x + tw * 0.50f, top - 0.045f * h, x + tw * 0.82f, top, edge)
-                }
-                canvas.drawRect(x, top, x + tw, cityBase, edge)
-                if (detail) {
-                    val bands = 3 + t.tier
-                    for (i in 1 until bands) {
-                        val yy = top + (cityBase - top) * i / bands
-                        canvas.drawLine(x + tw * .16f, yy, x + tw * .84f, yy, edge)
-                    }
-                    for (i in 0 until t.tier.coerceAtMost(4)) {
-                        val xx = x + tw * (0.30f + i * 0.16f)
-                        canvas.drawLine(xx, top + tw * .20f, xx, cityBase - tw * .18f, windowPaint)
-                    }
-                }
+            for ((i,b) in blocks.withIndex()) {
+                block(b[0],b[1],b[2],i%3==0)
+                block(1f-b[0]-b[1],b[1],b[2],i%3==0)
             }
 
-            towers.forEachIndexed { i, t -> drawTower(t, if (i % 3 == 0) frontEdge else rearEdge, i % 2 == 0) }
-
-            // A broad central megastructure instead of a single isolated spire.
-            val cx = w * 0.515f
-            val megaW = w * 0.15f
-            val megaTop = horizonY - h * 0.39f
-            val mega = android.graphics.Path().apply {
-                moveTo(cx - megaW * .50f, cityBase)
-                lineTo(cx - megaW * .36f, horizonY - h * .18f)
-                lineTo(cx - megaW * .22f, megaTop + h * .07f)
-                lineTo(cx, megaTop)
-                lineTo(cx + megaW * .22f, megaTop + h * .07f)
-                lineTo(cx + megaW * .36f, horizonY - h * .18f)
-                lineTo(cx + megaW * .50f, cityBase)
-                close()
-            }
-            canvas.drawPath(mega, silhouette)
-            val megaEdge = linePaint(205, 1.15f)
-            canvas.drawPath(mega, megaEdge)
-            canvas.drawLine(cx, megaTop, cx, cityBase, megaEdge)
-            canvas.drawLine(cx - megaW * .22f, megaTop + h * .07f, cx + megaW * .22f, megaTop + h * .07f, megaEdge)
-
-            // Animated light traveling through the skyline.
-            val sweep = ((kotlin.math.sin(phase) + 1f) * 0.5f)
-            val sweepX = w * (0.08f + sweep * 0.84f)
-            val sweepPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.rgb(0, 225, 255)
-                alpha = 135
-                strokeWidth = 1.25f * density
-            }
-            canvas.drawLine(sweepX, horizonY - 2f * density, sweepX, cityBase, sweepPaint)
-
-            // True TRON flying-over grid: all rails converge on one distant vanishing point.
-            // The phase moves the ground toward the viewer; lines are re-spawned at the horizon.
+            // A single exact vanishing point. Every longitudinal rail begins there.
             val save = canvas.save()
             canvas.clipRect(0f, horizonY, w, h)
-
-            val vpX = w * 0.5f
             val floorH = (h - horizonY).coerceAtLeast(1f)
-            val rail = linePaint(125, 0.72f)
-
-            // Longitudinal rails. They are deliberately sparse at the horizon and wide at
-            // the camera edge, which creates depth instead of a flat running-track look.
-            val railPositions = floatArrayOf(
-                -1.20f, -0.92f, -0.66f, -0.43f, -0.22f, 0f,
-                0.22f, 0.43f, 0.66f, 0.92f, 1.20f
-            )
-            railPositions.forEach { p ->
-                val bottomX = vpX + p * w
-                canvas.drawLine(vpX, horizonY, bottomX, h + 2f, rail)
+            val rails = floatArrayOf(-1.30f,-1.05f,-0.82f,-0.62f,-0.45f,-0.30f,-0.16f,0f,0.16f,0.30f,0.45f,0.62f,0.82f,1.05f,1.30f)
+            val rail = paint(135, 0.72f)
+            for (p in rails) {
+                canvas.drawLine(cx, horizonY, cx + p*w, h + 2f, rail)
             }
 
-            // Perspective cross-lines. z grows exponentially, so the near field opens up
-            // strongly while the horizon remains dense and distant.
-            val phase01 = phase / (Math.PI.toFloat() * 2f)
-            for (i in 0..22) {
-                val u = (i / 22f + phase01) % 1f
-                val depth = 0.035f + u * u * 0.965f
-                val y = horizonY + floorH * depth
-                val alpha = (45 + depth * 115f).toInt().coerceIn(35, 160)
-                canvas.drawLine(0f, y, w, y, linePaint(alpha, 0.62f + depth * 0.38f))
+            // Strictly horizontal cross-lines with perspective spacing.
+            val phase01 = phase / (Math.PI.toFloat()*2f)
+            for (i in 0..29) {
+                val u = (i / 30f + phase01) % 1f
+                val depth = 0.025f + u*u*0.975f
+                val y = horizonY + floorH*depth
+                val a = (42f + depth*108f).toInt().coerceIn(35,155)
+                canvas.drawLine(0f,y,w,y,paint(a,0.60f + depth*0.34f))
             }
 
-            // A few brighter "speed" rails reinforce the forward-motion illusion.
-            val speedRail = linePaint(175, 0.95f)
-            val movingDepths = floatArrayOf(0.30f, 0.58f, 0.84f)
-            movingDepths.forEach { base ->
-                val u = (base + phase01 * 1.7f) % 1f
-                val depth = 0.035f + u * u * 0.965f
-                val y = horizonY + floorH * depth
-                canvas.drawLine(0f, y, w, y, speedRail)
+            // Only a few travelling lines, so the grid remains clean.
+            val moving = paint(180, 0.95f)
+            for (base in floatArrayOf(0.23f,0.52f,0.79f)) {
+                val u = (base + phase01*1.35f) % 1f
+                val depth = 0.025f + u*u*0.975f
+                canvas.drawLine(0f,horizonY+floorH*depth,w,horizonY+floorH*depth,moving)
             }
-
-            // Subtle floor atmosphere; it fades toward the camera instead of flattening it.
-            val floorGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                shader = android.graphics.LinearGradient(
-                    0f, horizonY, 0f, h,
-                    intArrayOf(Color.argb(42, 0, 165, 255), Color.argb(8, 0, 90, 150), Color.TRANSPARENT),
-                    floatArrayOf(0f, 0.18f, 1f),
-                    android.graphics.Shader.TileMode.CLAMP
-                )
-            }
-            canvas.drawRect(0f, horizonY, w, h, floorGlow)
             canvas.restoreToCount(save)
 
-            val horizon = linePaint(185, 1.05f)
-            canvas.drawLine(0f, horizonY, w, horizonY, horizon)
-            val pulse = 0.5f + 0.5f * kotlin.math.sin(phase * 1.7f)
+            // Reference-style horizon and a small central light, not a giant tower.
+            canvas.drawLine(0f,horizonY,w,horizonY,paint(190,1.05f))
+            val pulse = 0.5f + 0.5f*kotlin.math.sin(phase*1.4f)
             val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.rgb(0, 225, 255)
-                alpha = (35 + pulse * 45).toInt()
+                color = Color.rgb(0,225,255)
+                alpha = (45f + pulse*40f).toInt()
             }
-            canvas.drawCircle(cx, megaTop, (4f + pulse * 3f) * density, glow)
+            canvas.drawCircle(cx,horizonY,(3f+pulse*3f)*resources.displayMetrics.density,glow)
         }
     }
 
