@@ -8,4 +8,4 @@ APK релизов публикуется через GitHub Actions workflow `Re
 
 CI release trigger: 2026-10-06.
 
-RFCOMM diagnostic build marker: 2026-10-05T23:55Z
+RFCOMM diagnostic build marker: 2026-10-06T00:20Z
