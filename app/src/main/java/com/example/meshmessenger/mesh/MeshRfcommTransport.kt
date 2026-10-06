@@ -16,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 
-/** Classic Bluetooth RFCOMM transport following Briar's Bluetooth transport model. */
+/** Minimal Classic Bluetooth RFCOMM transport: one server socket, one socket per peer, length-prefixed frames. */
 class MeshRfcommTransport(
     private val context: Context,
     private val adapter: BluetoothAdapter,
@@ -54,7 +54,6 @@ class MeshRfcommTransport(
         }
         running = true
         runCatching {
-            // Briar uses insecure RFCOMM so an unpaired peer can connect.
             serverSocket = adapter.listenUsingInsecureRfcommWithServiceRecord(SERVICE_NAME, serviceUuid)
             onDiagnostic("BT_RFCOMM", "server_opened mode=insecure")
             acceptTask = io.submit { acceptLoop() }
@@ -91,9 +90,6 @@ class MeshRfcommTransport(
                         " address=**" + address.takeLast(5)
                 )
                 adapter.cancelDiscovery()
-
-                // Do not try secure RFCOMM first. Briar deliberately uses the
-                // insecure API because it does not require Bluetooth pairing.
                 socket = device.createInsecureRfcommSocketToServiceRecord(peerServiceUuid)
                 socket.connect()
                 attach(socket, "outgoing")
