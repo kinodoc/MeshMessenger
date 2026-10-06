@@ -72,7 +72,7 @@ object MeshBugReport {
     private fun runtimeState(context: Context): String = buildString {
         appendLine("runtime_diagnostics_schema=1")
         appendLine("bluetooth_permission=" + permission(context, Manifest.permission.BLUETOOTH_CONNECT))
-        appendLine("bluetooth_scan_permission=" + permission(context, Manifest.permission.BLUETOOTH_SCAN)))
+        appendLine("bluetooth_scan_permission=" + permission(context, Manifest.permission.BLUETOOTH_SCAN))
         appendLine("location_permission=" + permission(context, Manifest.permission.ACCESS_FINE_LOCATION))
         appendLine("bluetooth_enabled=" + runCatching {
             val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
