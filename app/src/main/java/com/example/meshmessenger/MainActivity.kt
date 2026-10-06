@@ -18,7 +18,6 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
-import android.net.Uri
 import android.widget.*
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -194,31 +193,6 @@ class MainActivity : ComponentActivity() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-    private class TronVideoBackgroundView(context: Context) : android.widget.VideoView(context) {
-        init {
-            setBackgroundColor(Color.rgb(0, 3, 8))
-            setVideoURI(Uri.parse("android.resource://${context.packageName}/${R.raw.tron_loop}"))
-            setOnPreparedListener { player ->
-                player.isLooping = true
-                player.setVolume(0f, 0f)
-                post {
-                    val videoRatio = player.videoWidth / player.videoHeight.toFloat().coerceAtLeast(1f)
-                    val viewRatio = width / height.toFloat().coerceAtLeast(1f)
-                    if (videoRatio > viewRatio) scaleX = videoRatio / viewRatio
-                    else if (videoRatio < viewRatio) scaleY = viewRatio / videoRatio
-                    start()
-                }
-            }
-            setOnErrorListener { _, _, _ ->
-                setBackgroundColor(Color.rgb(0, 3, 8))
-                true
-            }
-        }
-        override fun onDetachedFromWindow() {
-            runCatching { stopPlayback() }
-            super.onDetachedFromWindow()
-        }
-    }
     private fun homeText(textValue: String, size: Float = 16f): TextView =
         TextView(this).apply {
             text = textValue
