@@ -273,13 +273,4 @@ class MeshBluetoothNode(
         } else {
             intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
         }
-    private fun startDiscovery() {
-        if (!running || !adapter.isEnabled) return
-        if (runCatching { adapter.isDiscovering }.getOrDefault(false)) {
-            onDiagnostic("BT_DISCOVERY", "already_active")
-            return
-        }
-        val started = runCatching { adapter.startDiscovery() }.getOrDefault(false)
-        onDiagnostic("BT_DISCOVERY", "start=" + started)
-        if (!started) handler.postDelayed({ if (running) startDiscovery() }, 1500L)
-    }
+}
