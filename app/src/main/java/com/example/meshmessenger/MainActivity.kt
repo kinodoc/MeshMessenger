@@ -243,6 +243,48 @@ class MainActivity : ComponentActivity() {
             }
             canvas.drawRect(0f, horizonY - 28f * density, w, horizonY + 52f * density, horizonGlow)
 
+            // Cinematic TRON city silhouette with a central animated spire.
+            val skylineBase = horizonY + 2f * density
+            val skyline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(1, 9, 18)
+                style = Paint.Style.FILL
+            }
+            val skylineGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(0, 120, 190)
+                style = Paint.Style.STROKE
+                strokeWidth = 0.8f * density
+                alpha = 105
+            }
+            val buildingCount = 13
+            for (i in 0 until buildingCount) {
+                val bw = w / buildingCount * (0.55f + (i % 3) * 0.12f)
+                val x = i * w / buildingCount
+                val bh = h * (0.045f + ((i * 37) % 7) * 0.012f)
+                canvas.drawRect(x, skylineBase - bh, x + bw, skylineBase, skyline)
+                if (i % 2 == 0) canvas.drawLine(x + bw * 0.28f, skylineBase - bh + 5f * density, x + bw * 0.28f, skylineBase - 4f * density, skylineGlow)
+            }
+            val cx = w * 0.5f
+            val spireW = w * 0.11f
+            val spireTop = horizonY - h * 0.27f
+            val spirePath = android.graphics.Path().apply {
+                moveTo(cx - spireW * 0.5f, skylineBase)
+                lineTo(cx - spireW * 0.16f, spireTop + h * 0.035f)
+                lineTo(cx, spireTop)
+                lineTo(cx + spireW * 0.16f, spireTop + h * 0.035f)
+                lineTo(cx + spireW * 0.5f, skylineBase)
+                close()
+            }
+            canvas.drawPath(spirePath, skyline)
+            canvas.drawLine(cx, spireTop, cx, skylineBase, skylineGlow)
+            val pulse = 0.5f + 0.5f * kotlin.math.sin(offset * 0.18f)
+            val spireLight = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(0, 220, 255)
+                strokeWidth = (1.2f + pulse * 1.4f) * density
+                alpha = (120 + pulse * 120).toInt()
+            }
+            canvas.drawLine(cx, spireTop, cx, spireTop + h * 0.09f, spireLight)
+            canvas.drawCircle(cx, spireTop, (2f + pulse * 2f) * density, spireLight)
+
             val save = canvas.save()
             canvas.clipRect(0f, horizonY, w, h)
             // Uniform vertical grid rails: parallel lines, no convergence bundle.
@@ -421,7 +463,7 @@ class MainActivity : ComponentActivity() {
                 button.setTextColor(if (active) Color.WHITE else Color.rgb(105, 210, 255))
             }
         }
-        listOf("BT" to "BT", "BOTH" to "BT + RELAY", "RELAY" to "RELAY").forEach { (mode, label) ->
+        listOf("BT" to "BLE", "BOTH" to "BLE + RELAY", "RELAY" to "RELAY").forEach { (mode, label) ->
             val button = Button(this).apply {
                 text = label
                 textSize = 11f
@@ -913,6 +955,7 @@ class MainActivity : ComponentActivity() {
                     setStroke(1, 0xFF164B61.toInt())
                 }
                 setOnClickListener { dialog.dismiss(); openChat(contact) }
+                post { val lp = layoutParams; if (width > 0 && lp != null) { lp.height = width; layoutParams = lp } }
                 addView(TextView(this@MainActivity).apply {
                     text = contact.name
                     textSize = 18f
