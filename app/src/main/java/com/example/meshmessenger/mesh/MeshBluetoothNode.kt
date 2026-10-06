@@ -11,7 +11,6 @@ import android.os.ParcelUuid
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 import java.util.UUID
-import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /** Clean transport: BLE discovers peers, classic RFCOMM carries data. */
