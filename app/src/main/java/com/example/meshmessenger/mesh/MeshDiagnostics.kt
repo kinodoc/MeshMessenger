@@ -54,7 +54,7 @@ class MeshDiagnostics(context: Context) {
 
     fun readForUpload(): String = synchronized(lock) {
         runCatching {
-            // Keep the recent window across session boundaries. BLE failures often
+            // Keep the recent window across session boundaries. BT failures often
             // happen during startup/reconnect, before the report button is pressed.
             file.readLines(Charsets.UTF_8)
                 .takeLast(MAX_LINES)
