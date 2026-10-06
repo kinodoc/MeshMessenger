@@ -63,7 +63,7 @@ class MeshForegroundService : Service() {
         private const val KEY_ENABLED = "mesh_enabled"
     }
 
-    private var node: MeshGattNode? = null
+    private var node: MeshBluetoothNode? = null
     private var meshEnabled = false
     private var transportMode = "BOTH"
     private var relayTransport: MeshRelayTransport? = null
@@ -371,7 +371,7 @@ class MeshForegroundService : Service() {
         if (adapter != null) {
             runCatching {
                 nodeStartedAtMs = System.currentTimeMillis()
-                node = MeshGattNode(
+                node = MeshBluetoothNode(
                     this,
                     adapter,
                     identity.nodeId,
