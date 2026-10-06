@@ -5,15 +5,16 @@ import os
 import re
 import tempfile
 import urllib.request
+from html import unescape
 
 REPO = "kinodoc/MeshMessenger"
 ROOT = "/var/www/html/mesh-update"
-API = f"https://api.github.com/repos/{REPO}/releases/latest"
+RELEASE_PAGE = f"https://github.com/{REPO}/releases/latest"
 USER_AGENT = "MeshMessenger-VPS-Updater/1.0"
 
 
 def get(url: str) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"})
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/json"})
     with urllib.request.urlopen(req, timeout=30) as response:
         return response.read()
 
@@ -35,17 +36,13 @@ def atomic_write(path: str, data: bytes) -> None:
 def main() -> None:
     os.makedirs(ROOT, mode=0o755, exist_ok=True)
 
-    release = json.loads(get(API).decode("utf-8"))
-    tag = release.get("tag_name", "").removeprefix("v")
-    assets = release.get("assets") or []
-    apk = next(
-        (a for a in assets
-         if a.get("name", "").lower().endswith(".apk")
-         and a.get("name", "").startswith("MeshMessenger")),
-        None,
-    )
-    if not tag or not apk:
-        raise RuntimeError("Latest GitHub release has no MeshMessenger APK")
+    html = get(RELEASE_PAGE).decode("utf-8", errors="replace")
+    tag_match = re.search(r'/kinodoc/MeshMessenger/releases/tag/([^"\\?]+)', html)
+    if not tag_match:
+        raise RuntimeError("Latest GitHub release tag not found")
+    tag = unescape(tag_match.group(1)).removeprefix("v")
+    apk_name = f"MeshMessenger-v{tag}.apk"
+    apk_url = f"https://github.com/{REPO}/releases/download/v{tag}/{apk_name}"
 
     state_path = os.path.join(ROOT, "state.json")
     if os.path.exists(state_path):
@@ -56,15 +53,13 @@ def main() -> None:
         except Exception:
             pass
 
-    gradle_url = f"https://raw.githubusercontent.com/{REPO}/{release['tag_name']}/app/build.gradle.kts"
+    gradle_url = f"https://raw.githubusercontent.com/{REPO}/v{tag}/app/build.gradle.kts"
     gradle = get(gradle_url).decode("utf-8")
     match = re.search(r"versionCode\s*=\s*(\d+)", gradle)
     if not match:
         raise RuntimeError("versionCode not found in release source")
     version_code = int(match.group(1))
 
-    apk_name = apk["name"]
-    apk_url = apk["browser_download_url"]
     apk_bytes = get(apk_url)
     if len(apk_bytes) < 100_000:
         raise RuntimeError("Downloaded APK is unexpectedly small")
