@@ -52,8 +52,6 @@ class UpdateManager(private val context: Context) {
     }
     companion object {
         private const val UPDATE_URL = "https://194.87.186.159/mesh-update/update.json"
-        private const val RELEASES_URL = "https://api.github.com/repos/kinodoc/MeshMessenger/releases/latest"
-        private const val RELEASE_PAGE_URL = "https://github.com/kinodoc/MeshMessenger/releases/latest"
         private const val APK_PREFIX = "MeshMessenger"
     }
 
@@ -62,9 +60,6 @@ class UpdateManager(private val context: Context) {
     fun check(onResult: (Result<ReleaseInfo?>) -> Unit) {
         Thread {
             val result = runCatching { fetchLatestFromVps() }
-                .recoverCatching { fetchLatestFromApi() }
-                .recoverCatching { fetchLatestFromGitHubPage() }
-                .recoverCatching { fetchLatestFromRedirect() }
             Handler(Looper.getMainLooper()).post { onResult(result) }
         }.start()
     }
@@ -92,80 +87,7 @@ class UpdateManager(private val context: Context) {
         }
     }
 
-    private fun fetchLatestFromApi(): ReleaseInfo? {
-        val connection = openHttpConnection(RELEASES_URL).apply {
-            requestMethod = "GET"
-            connectTimeout = 5000
-            readTimeout = 5000
-            setRequestProperty("Accept", "application/vnd.github+json")
-            setRequestProperty("User-Agent", "MeshMessenger")
-        }
-        return try {
-            if (connection.responseCode !in 200..299) error("GitHub API HTTP ${connection.responseCode}")
-            parseReleaseJson(connection.inputStream.bufferedReader().use { it.readText() })
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    private fun parseReleaseJson(body: String): ReleaseInfo? {
-        val json = JSONObject(body)
-        val tag = json.optString("tag_name").removePrefix("v")
-        val assets = json.optJSONArray("assets") ?: return null
-        for (i in 0 until assets.length()) {
-            val asset = assets.getJSONObject(i)
-            val name = asset.optString("name")
-            val url = asset.optString("browser_download_url")
-            if (name.endsWith(".apk", true) && name.startsWith(APK_PREFIX) && url.startsWith("https://")) {
-                return ReleaseInfo(tag, url, name)
-            }
-        }
-        return null
-    }
-
-    private fun fetchLatestFromRedirect(): ReleaseInfo? {
-        val connection = openHttpConnection(RELEASE_PAGE_URL).apply {
-            requestMethod = "HEAD"
-            connectTimeout = 8000
-            readTimeout = 8000
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "MeshMessenger")
-        }
-        return try {
-            if (connection.responseCode !in 200..399) error("GitHub redirect HTTP " + connection.responseCode)
-            val path = connection.url.path ?: return null
-            val tag = Regex("/releases/tag/([^/]+)")
-                .find(path)?.groupValues?.getOrNull(1)?.removePrefix("v")
-                ?: return null
-            val apkName = "MeshMessenger-v" + tag + ".apk"
-            ReleaseInfo(tag, "https://github.com/kinodoc/MeshMessenger/releases/download/v" + tag + "/" + apkName, apkName)
-        } finally {
-            connection.disconnect()
-        }
-    }
-    private fun fetchLatestFromGitHubPage(): ReleaseInfo? {
-        val connection = openHttpConnection(RELEASE_PAGE_URL).apply {
-            requestMethod = "GET"
-            connectTimeout = 5000
-            readTimeout = 5000
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "MeshMessenger")
-        }
-        return try {
-            if (connection.responseCode !in 200..299) error("GitHub releases page HTTP ${connection.responseCode}")
-            val html = connection.inputStream.bufferedReader().use { it.readText() }
-            val tag = Regex("/kinodoc/MeshMessenger/releases/tag/([^\"/?]+)")
-                .find(html)?.groupValues?.getOrNull(1)?.removePrefix("v")
-                ?: return null
-            val apkName = "MeshMessenger-v$tag.apk"
-            val apkUrl = "https://github.com/kinodoc/MeshMessenger/releases/download/v$tag/$apkName"
-            ReleaseInfo(tag, apkUrl, apkName)
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    fun isNewer(release: ReleaseInfo): Boolean = release.versionCode?.let { it > BuildConfig.VERSION_CODE }
+n\n    fun isNewer(release: ReleaseInfo): Boolean = release.versionCode?.let { it > BuildConfig.VERSION_CODE }
         ?: (compareVersions(release.version, BuildConfig.VERSION_NAME) > 0)
 
     private fun compareVersions(a: String, b: String): Int {
@@ -188,7 +110,7 @@ class UpdateManager(private val context: Context) {
                     readTimeout = 30000
                     setRequestProperty("User-Agent", "MeshMessenger")
                 }
-                if (connection.responseCode !in 200..299) error("GitHub: HTTP ${connection.responseCode}")
+                if (connection.responseCode !in 200..299) error("VPS: HTTP ${connection.responseCode}")
                 val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
                     ?: error("Не удалось открыть каталог загрузок")
                 dir.mkdirs()
