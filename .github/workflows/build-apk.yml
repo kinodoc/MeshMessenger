@@ -3,7 +3,7 @@ name: Build Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "Concept" ]
   pull_request:
     branches: [ "main" ]
 
@@ -101,6 +101,24 @@ jobs:
           name: MeshMessenger-signed-apk
           path: MeshMessenger-v*.apk
           if-no-files-found: error
+
+      - name: Publish Concept build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/Concept'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cp MeshMessenger-v*.apk MeshMessenger-Concept.apk
+          if gh release view concept >/dev/null 2>&1; then
+            gh release upload concept MeshMessenger-Concept.apk --clobber
+          else
+            gh release create concept MeshMessenger-Concept.apk \
+              --target "$GITHUB_SHA" \
+              --title "MeshMessenger Concept" \
+              --notes "Automated Concept test build from branch Concept." \
+              --prerelease \
+              --latest=false
+          fi
 
       - name: Publish GitHub Release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
