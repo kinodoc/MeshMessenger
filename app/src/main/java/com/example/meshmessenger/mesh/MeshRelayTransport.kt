@@ -24,6 +24,7 @@ import javax.net.ssl.X509TrustManager
 
 /** Internet rendezvous and store-and-forward for end-to-end encrypted MeshPacket envelopes. */
 class MeshRelayTransport(
+    private val context: Context,
     private val localId: String,
     private val localName: String,
     private val publicKey: ByteArray,
