@@ -1082,6 +1082,7 @@ class MainActivity : ComponentActivity() {
             }.also {
                 (it.layoutParams as? LinearLayout.LayoutParams)?.setMargins(0, 0, 0, dp(10))
             })
+        }
         if (contacts.all().isEmpty()) {
             list.addView(TextView(this).apply {
                 text = "Контакты появятся автоматически после первого сообщения.\n\nNode ID используется как уникальный идентификатор."
