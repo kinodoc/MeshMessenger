@@ -42,8 +42,8 @@ object MeshBugReport {
         }
 
         // Do not archive raw Bluetooth snapshots: some Android implementations include
-        // nearby device names or addresses. The event log carries BLE state and error codes.
-        val bluetoothSummary = "Raw Bluetooth snapshot omitted for privacy. See mesh_diagnostics.log for the extended BLE lifecycle trace.\n"
+        // nearby device names or addresses. The event log carries BT state and error codes.
+        val bluetoothSummary = "Raw Bluetooth snapshot omitted for privacy. See mesh_diagnostics.log for the extended BT lifecycle trace.\n"
         val safeTrace = crashTrace.orEmpty().lineSequence()
             .filter { it.startsWith("event=") || it.startsWith("exception=") || it.startsWith(" at ") || it.startsWith("cause=") }
             .map { line ->
@@ -73,7 +73,6 @@ object MeshBugReport {
         appendLine("runtime_diagnostics_schema=1")
         appendLine("bluetooth_permission=" + permission(context, Manifest.permission.BLUETOOTH_CONNECT))
         appendLine("bluetooth_scan_permission=" + permission(context, Manifest.permission.BLUETOOTH_SCAN))
-        appendLine("bluetooth_advertise_permission=" + permission(context, Manifest.permission.BLUETOOTH_ADVERTISE))
         appendLine("location_permission=" + permission(context, Manifest.permission.ACCESS_FINE_LOCATION))
         appendLine("bluetooth_enabled=" + runCatching {
             val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
@@ -97,8 +96,7 @@ object MeshBugReport {
 
     private fun permission(context: Context, name: String): String =
         if (Build.VERSION.SDK_INT < 31 && (name == Manifest.permission.BLUETOOTH_CONNECT ||
-                name == Manifest.permission.BLUETOOTH_SCAN ||
-                name == Manifest.permission.BLUETOOTH_ADVERTISE)) {
+                name == Manifest.permission.BLUETOOTH_SCAN)) {
             "not_required_on_this_android"
         } else if (ContextCompat.checkSelfPermission(context, name) == PackageManager.PERMISSION_GRANTED) {
             "granted"
