@@ -1,0 +1,11 @@
+[Unit]
+Description=MeshMessenger GitHub release to VPS update channel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/mesh-update/sync_mesh_update.py
+User=root
+Nice=10
+IOSchedulingClass=idle

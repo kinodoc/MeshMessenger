@@ -587,9 +587,9 @@ class MainActivity : ComponentActivity() {
                 result.onSuccess { release ->
                     when {
                         release == null -> if (manual) {
-                            updateStatus.text = "В GitHub Release нет APK для установки"
+                            updateStatus.text = "На сервере обновлений нет APK для установки"
                         }
-                        !updater.isNewer(release.version) -> if (manual) {
+                        !updater.isNewer(release) -> if (manual) {
                             updateStatus.text = "Установлена актуальная версия ${BuildConfig.VERSION_NAME}"
                         }
                         else -> {

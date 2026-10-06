@@ -51,20 +51,45 @@ class UpdateManager(private val context: Context) {
         throw lastError ?: IllegalStateException("Нет доступного сетевого подключения")
     }
     companion object {
+        private const val UPDATE_URL = "https://194.87.186.159/mesh-update/update.json"
         private const val RELEASES_URL = "https://api.github.com/repos/kinodoc/MeshMessenger/releases/latest"
         private const val RELEASE_PAGE_URL = "https://github.com/kinodoc/MeshMessenger/releases/latest"
         private const val APK_PREFIX = "MeshMessenger"
     }
 
-    data class ReleaseInfo(val version: String, val apkUrl: String, val apkName: String)
+    data class ReleaseInfo(val version: String, val apkUrl: String, val apkName: String, val versionCode: Int? = null, val sha256: String? = null)
 
     fun check(onResult: (Result<ReleaseInfo?>) -> Unit) {
         Thread {
-            val result = runCatching { fetchLatestFromApi() }
+            val result = runCatching { fetchLatestFromVps() }
+                .recoverCatching { fetchLatestFromApi() }
                 .recoverCatching { fetchLatestFromGitHubPage() }
                 .recoverCatching { fetchLatestFromRedirect() }
             Handler(Looper.getMainLooper()).post { onResult(result) }
         }.start()
+    }
+
+    private fun fetchLatestFromVps(): ReleaseInfo? {
+        val connection = openHttpConnection(UPDATE_URL).apply {
+            requestMethod = "GET"
+            connectTimeout = 5000
+            readTimeout = 5000
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("User-Agent", "MeshMessenger")
+        }
+        return try {
+            if (connection.responseCode !in 200..299) error("VPS update HTTP ${connection.responseCode}")
+            val json = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            val version = json.optString("version").removePrefix("v")
+            val versionCode = json.optInt("versionCode", -1).takeIf { it > 0 }
+            val apkUrl = json.optString("apkUrl")
+            val apkName = json.optString("apkName")
+            val sha256 = json.optString("sha256").takeIf { it.matches(Regex("[0-9a-fA-F]{64}")) }
+            if (version.isBlank() || !apkUrl.startsWith("https://") || apkName.isBlank()) return null
+            ReleaseInfo(version, apkUrl, apkName, versionCode, sha256)
+        } finally {
+            connection.disconnect()
+        }
     }
 
     private fun fetchLatestFromApi(): ReleaseInfo? {
@@ -140,7 +165,8 @@ class UpdateManager(private val context: Context) {
         }
     }
 
-    fun isNewer(version: String): Boolean = compareVersions(version, BuildConfig.VERSION_NAME) > 0
+    fun isNewer(release: ReleaseInfo): Boolean = release.versionCode?.let { it > BuildConfig.VERSION_CODE }
+        ?: (compareVersions(release.version, BuildConfig.VERSION_NAME) > 0)
 
     private fun compareVersions(a: String, b: String): Int {
         val pa = a.trim().removePrefix("v").split(".").map { it.toIntOrNull() ?: 0 }
