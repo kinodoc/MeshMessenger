@@ -86,27 +86,9 @@ jobs:
           # APK Signature Scheme V2. Keep zipalign before signing so alignment
           # does not invalidate the JAR signature.
           V1_APK="$RUNNER_TEMP/mesh-messenger-v1.apk"
-          jarsigner \
-            -keystore "$RELEASE_STORE_FILE" \
-            -storepass "$RELEASE_STORE_PASSWORD" \
-            -keypass "$RELEASE_KEY_PASSWORD" \
-            -sigalg SHA256withRSA \
-            -digestalg SHA-256 \
-            -signedjar "$V1_APK" \
-            "$ALIGNED_APK" \
-            "$RELEASE_KEY_ALIAS"
+          jarsigner             -keystore "$RELEASE_STORE_FILE"             -storepass "$RELEASE_STORE_PASSWORD"             -keypass "$RELEASE_KEY_PASSWORD"             -sigalg SHA256withRSA             -digestalg SHA-256             -signedjar "$V1_APK"             "$ALIGNED_APK"             "$RELEASE_KEY_ALIAS"
 
-          "$APKSIGNER" sign \
-            --ks "$RELEASE_STORE_FILE" \
-            --ks-pass env:RELEASE_STORE_PASSWORD \
-            --ks-key-alias "$RELEASE_KEY_ALIAS" \
-            --key-pass env:RELEASE_KEY_PASSWORD \
-            --v1-signing-enabled true \
-            --v2-signing-enabled true \
-            --v3-signing-enabled false \
-            --v4-signing-enabled false \
-            --out "$FINAL_APK" \
-            "$V1_APK"
+          "$APKSIGNER" sign             --ks "$RELEASE_STORE_FILE"             --ks-pass env:RELEASE_STORE_PASSWORD             --ks-key-alias "$RELEASE_KEY_ALIAS"             --key-pass env:RELEASE_KEY_PASSWORD             --v1-signing-enabled true             --v2-signing-enabled true             --v3-signing-enabled false             --v4-signing-enabled false             --out "$FINAL_APK"             "$V1_APK"
 
           "$APKSIGNER" verify --verbose --print-certs "$FINAL_APK"
           "$APKSIGNER" verify --verbose "$FINAL_APK" | grep -q "Verified using v2 scheme (APK Signature Scheme v2): true"
@@ -128,10 +110,9 @@ jobs:
           VERSION_NAME=$(grep -m1 'versionName' app/build.gradle.kts | sed -E 's/.*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
           TAG="v$VERSION_NAME"
           APK="MeshMessenger-$TAG.apk"
+          echo "Publishing release $TAG from $GITHUB_SHA"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --clobber
           else
-            gh release create "$TAG" "$APK" \
-              --title "MeshMessenger $TAG" \
-              --generate-notes
+            gh release create "$TAG" "$APK"               --title "MeshMessenger $TAG"               --generate-notes
           fi
