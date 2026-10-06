@@ -379,6 +379,9 @@ class MainActivity : ComponentActivity() {
         })
 
         root.addView(homeText("Версия приложения: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", 15f))
+        root.addView(actionButton("RFCOMM DIRECT TEST", R.drawable.ic_bluetooth_mesh) {
+            startActivity(Intent(this, RfcommDiagnosticActivity::class.java))
+        })
 
         peerStatus = TextView(this).apply {
             textSize = 15f
