@@ -49,18 +49,18 @@ class MeshRfcommTransport(
         if (Build.VERSION.SDK_INT >= 31 &&
             context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) !=
             android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            onDiagnostic("BLE_RFCOMM", "skipped_missing_connect_permission")
+            onDiagnostic("BT_RFCOMM", "skipped_missing_connect_permission")
             return
         }
         running = true
         runCatching {
             // Briar uses insecure RFCOMM so an unpaired peer can connect.
             serverSocket = adapter.listenUsingInsecureRfcommWithServiceRecord(SERVICE_NAME, serviceUuid)
-            onDiagnostic("BLE_RFCOMM", "server_opened mode=insecure")
+            onDiagnostic("BT_RFCOMM", "server_opened mode=insecure")
             acceptTask = io.submit { acceptLoop() }
         }.onFailure {
             running = false
-            onDiagnostic("BLE_RFCOMM", "server_failed=${it.javaClass.simpleName}:${it.message}")
+            onDiagnostic("BT_RFCOMM", "server_failed=${it.javaClass.simpleName}:${it.message}")
         }
     }
 
@@ -85,7 +85,7 @@ class MeshRfcommTransport(
             var socket: BluetoothSocket? = null
             try {
                 onDiagnostic(
-                    "BLE_RFCOMM",
+                    "BT_RFCOMM",
                     "connect_start mode=insecure uuid=" + peerServiceUuid + " bonded=" +
                         runCatching { device.bondState == BluetoothDevice.BOND_BONDED }.getOrDefault(false) +
                         " address=**" + address.takeLast(5)
@@ -99,7 +99,7 @@ class MeshRfcommTransport(
                 attach(socket, "outgoing")
             } catch (t: Throwable) {
                 runCatching { socket?.close() }
-                onDiagnostic("BLE_RFCOMM", "connect_failed address=**${address.takeLast(5)} error=${t.javaClass.simpleName}:${t.message}")
+                onDiagnostic("BT_RFCOMM", "connect_failed address=**${address.takeLast(5)} error=${t.javaClass.simpleName}:${t.message}")
             }
         }
     }
@@ -110,11 +110,11 @@ class MeshRfcommTransport(
         val old = sockets.putIfAbsent(address, socket)
         if (old != null) {
             runCatching { socket.close() }
-            onDiagnostic("BLE_RFCOMM", "duplicate_socket_closed address=**${address.takeLast(5)}")
+            onDiagnostic("BT_RFCOMM", "duplicate_socket_closed address=**${address.takeLast(5)}")
             return
         }
         writers[address] = Any()
-        onDiagnostic("BLE_RFCOMM", "socket_connected direction=${direction} address=**${address.takeLast(5)}")
+        onDiagnostic("BT_RFCOMM", "socket_connected direction=${direction} address=**${address.takeLast(5)}")
         onConnected(address)
         send(address, helloPayload())
         reads[address] = io.submit { readLoop(address, socket) }
@@ -128,11 +128,11 @@ class MeshRfcommTransport(
                 if (length <= 0 || length > MAX_FRAME) throw IllegalArgumentException("bad_frame_length=${length}")
                 val payload = ByteArray(length)
                 readFully(input, payload)
-                onDiagnostic("BLE_RFCOMM_RX", "address=**${address.takeLast(5)} bytes=${length}")
+                onDiagnostic("BT_RFCOMM_RX", "address=**${address.takeLast(5)} bytes=${length}")
                 onFrame(address, payload)
             }
         } catch (t: Throwable) {
-            if (running) onDiagnostic("BLE_RFCOMM", "read_end address=**${address.takeLast(5)} error=${t.javaClass.simpleName}")
+            if (running) onDiagnostic("BT_RFCOMM", "read_end address=**${address.takeLast(5)} error=${t.javaClass.simpleName}")
         } finally {
             remove(address, socket)
         }
@@ -156,7 +156,7 @@ class MeshRfcommTransport(
     fun markReady(address: String): Boolean {
         if (!sockets.containsKey(address)) return false
         ready.add(address)
-        onDiagnostic("BLE_RFCOMM", "ready=true address=**${address.takeLast(5)}")
+        onDiagnostic("BT_RFCOMM", "ready=true address=**${address.takeLast(5)}")
         return true
     }
 
@@ -170,10 +170,10 @@ class MeshRfcommTransport(
                 out.write(ByteBuffer.allocate(4).putInt(bytes.size).array())
                 out.write(bytes)
                 out.flush()
-                onDiagnostic("BLE_RFCOMM_TX", "address=**${address.takeLast(5)} bytes=${bytes.size}")
+                onDiagnostic("BT_RFCOMM_TX", "address=**${address.takeLast(5)} bytes=${bytes.size}")
                 true
             }.getOrElse {
-                onDiagnostic("BLE_RFCOMM", "write_failed address=**${address.takeLast(5)} error=${it.javaClass.simpleName}")
+                onDiagnostic("BT_RFCOMM", "write_failed address=**${address.takeLast(5)} error=${it.javaClass.simpleName}")
                 false
             }
         }
@@ -188,7 +188,7 @@ class MeshRfcommTransport(
             reads.remove(address)?.cancel(false)
             runCatching { socket.close() }
             onDisconnected(address)
-            onDiagnostic("BLE_RFCOMM", "socket_closed address=**${address.takeLast(5)}")
+            onDiagnostic("BT_RFCOMM", "socket_closed address=**${address.takeLast(5)}")
         }
     }
 
@@ -204,6 +204,6 @@ class MeshRfcommTransport(
         writers.clear()
         runCatching { serverSocket?.close() }
         serverSocket = null
-        onDiagnostic("BLE_RFCOMM", "stopped")
+        onDiagnostic("BT_RFCOMM", "stopped")
     }
 }
