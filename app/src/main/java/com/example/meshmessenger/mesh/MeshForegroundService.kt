@@ -596,7 +596,7 @@ class MeshForegroundService : Service() {
             this,
             1,
             Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABT
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val notificationId = 10_000 + ((packetId ?: "$sourceId:$text").hashCode() and 0x7FFF_FFFF) % 90_000
 
