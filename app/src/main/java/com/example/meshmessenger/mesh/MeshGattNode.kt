@@ -197,9 +197,8 @@ class MeshGattNode(
                         "client_connected address=**" + device.address.takeLast(5) +
                             " server_clients=" + serverClients.size + " ready=" + gattReady.size
                     )
-                    // BLESSED owns the central connection lifecycle. A peripheral-side
-                    // connection is not enough to mark a peer online; wait for the
-                    // application HELLO handshake below.
+                    // A peripheral-side connection is not enough to mark a peer online;
+                    // wait for the application HELLO handshake below.
                     onDiagnostic("BLE_GATT_SERVER", "waiting_for_hello address=**" + device.address.takeLast(5))
                 } else {
                     serverClients.remove(device.address)
@@ -517,9 +516,7 @@ class MeshGattNode(
         val task = writeQueues[address]?.firstOrNull() ?: return
         val part = task.fragments.firstOrNull() ?: return
 
-        // BLESSED is the sole owner of central-side GATT writes. There is no
-        // legacy BluetoothGatt fallback: having two GATT implementations in
-        // parallel was the source of duplicate connections and status 133.
+        // Native Android BluetoothGatt is the only central-side GATT owner.
         writing.add(address)
         val started = nativeCentral.write(address, part)
         if (!started) {
