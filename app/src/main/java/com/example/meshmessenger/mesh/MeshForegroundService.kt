@@ -324,6 +324,7 @@ class MeshForegroundService : Service() {
 
         if (transportMode != "BT" && relayTransport == null) runCatching {
             relayTransport = MeshRelayTransport(
+                context = this,
                 localId = identity.nodeId,
                 localName = identity.displayName,
                 publicKey = identity.keyPair.public.encoded,
