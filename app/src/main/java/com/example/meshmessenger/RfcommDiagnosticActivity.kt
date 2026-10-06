@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.os.*
 import android.widget.*
 import androidx.core.content.ContextCompat
+import com.example.meshmessenger.mesh.MeshDiagnostics
 import java.io.EOFException
 import java.io.InputStream
 import java.io.OutputStream
@@ -25,6 +26,7 @@ class RfcommDiagnosticActivity : Activity() {
     private lateinit var adapter: BluetoothAdapter
     private lateinit var logView: TextView
     private lateinit var list: LinearLayout
+    private lateinit var diagnostics: MeshDiagnostics
     private val io = Executors.newCachedThreadPool()
     private var server: BluetoothServerSocket? = null
     @Volatile private var running = false
@@ -47,6 +49,8 @@ class RfcommDiagnosticActivity : Activity() {
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
+        diagnostics = MeshDiagnostics(this)
+        diagnostics.event("RFCOMM_TEST", "activity_created")
         adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
         buildUi()
         registerReceiver(receiver, IntentFilter().apply {
@@ -91,7 +95,8 @@ class RfcommDiagnosticActivity : Activity() {
         if (!hasBtPermission()) { log("ERROR missing Bluetooth runtime permission"); return }
         runCatching {
             adapter.cancelDiscovery(); devices.clear(); rebuildList()
-            log("DISCOVERY started=" + adapter.startDiscovery())
+            val started = adapter.startDiscovery()
+            log("DISCOVERY started=" + started)
         }.onFailure { log("DISCOVERY error=" + it.javaClass.simpleName + ":" + it.message) }
     }
 
@@ -180,10 +185,12 @@ class RfcommDiagnosticActivity : Activity() {
 
     private fun log(s: String) {
         runOnUiThread { logView.append(s + "\n") }
+        diagnostics.event("RFCOMM_TEST", s)
         android.util.Log.i("RfcommDiagnostic", s)
     }
 
     override fun onDestroy() {
+        diagnostics.event("RFCOMM_TEST", "activity_destroyed")
         running=false; runCatching { unregisterReceiver(receiver) }; runCatching { server?.close() }
         io.shutdownNow(); super.onDestroy()
     }
