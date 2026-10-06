@@ -167,6 +167,9 @@ class MeshForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
 
+        createChannel()
+        startForeground(NOTIFICATION_ID, notification("Mesh Messenger работает"))
+
         diagnostics = MeshDiagnostics(this)
         diagnostics.event("SERVICE_CREATE")
         val bluetoothAdapter = runCatching {
@@ -179,13 +182,6 @@ class MeshForegroundService : Service() {
             diagnostics.crash(thread, throwable)
             previousCrashHandler?.uncaughtException(thread, throwable)
         }
-
-        createChannel()
-
-        startForeground(
-            NOTIFICATION_ID,
-            notification("Mesh Messenger работает")
-        )
 
         pendingMesh = PendingMessageStore(this)
         contacts = ContactStore(this)
@@ -203,6 +199,12 @@ class MeshForegroundService : Service() {
         flags: Int,
         startId: Int
     ): Int {
+        runCatching {
+            startForeground(NOTIFICATION_ID, notification("Mesh Messenger работает"))
+        }.onFailure {
+            android.util.Log.w("MeshMessenger", "Unable to reassert foreground state", it)
+        }
+
         when (intent?.action) {
 
             ACTION_APP_START -> {
@@ -655,6 +657,11 @@ class MeshForegroundService : Service() {
             NOTIFICATION_ID,
             notification(text)
         )
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        diagnostics.event("SERVICE_TASK_REMOVED")
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
