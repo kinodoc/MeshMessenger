@@ -112,14 +112,16 @@ class MeshRfcommTransport(
         writers[address] = Any()
         onDiagnostic("BT_RFCOMM", "socket_connected direction=${direction} address=**${address.takeLast(5)}")
         onConnected(address)
-        send(address, helloPayload())
         reads[address] = io.submit { readLoop(address, socket) }
+        val hello = helloPayload()
+        send(address, hello)
+        onDiagnostic("BT_HELLO_TX", "address=**" + address.takeLast(5) + " bytes=" + hello.size)
     }
 
     private fun readLoop(address: String, socket: BluetoothSocket) {
         try {
             val input = socket.inputStream
-            while (running && socket.isConnected) {
+            while (running) {
                 val length = readInt(input)
                 if (length <= 0 || length > MAX_FRAME) throw IllegalArgumentException("bad_frame_length=${length}")
                 val payload = ByteArray(length)
