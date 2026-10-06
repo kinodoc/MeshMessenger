@@ -51,7 +51,7 @@ class UpdateManager(private val context: Context) {
         throw lastError ?: IllegalStateException("Нет доступного сетевого подключения")
     }
     companion object {
-        private const val UPDATE_URL = "https://194.87.186.159/mesh-update/update.json"
+        private const val UPDATE_URL = "https://194.87.186.159/mesh-update/Concept/update.json"
         private const val APK_PREFIX = "MeshMessenger"
     }
 
