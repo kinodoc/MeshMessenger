@@ -87,7 +87,8 @@ class UpdateManager(private val context: Context) {
         }
     }
 
-n\n    fun isNewer(release: ReleaseInfo): Boolean = release.versionCode?.let { it > BuildConfig.VERSION_CODE }
+
+    fun isNewer(release: ReleaseInfo): Boolean = release.versionCode?.let { it > BuildConfig.VERSION_CODE }
         ?: (compareVersions(release.version, BuildConfig.VERSION_NAME) > 0)
 
     private fun compareVersions(a: String, b: String): Int {
