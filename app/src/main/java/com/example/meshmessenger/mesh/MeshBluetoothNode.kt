@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 
 /** Simple Classic Bluetooth chat node: Android discovery + insecure RFCOMM. No legacy low-energy stack. */
 class MeshBluetoothNode(
@@ -40,6 +41,9 @@ class MeshBluetoothNode(
     }
 
     private val handler = Handler(Looper.getMainLooper())
+    private val io = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "MeshBtNode").apply { isDaemon = true }
+    }
     private val peerNodeIds = ConcurrentHashMap<String, String>()
     private val readyPeers = ConcurrentHashMap.newKeySet<String>()
     private var receiverRegistered = false
@@ -114,10 +118,13 @@ class MeshBluetoothNode(
     private val presenceLoop = object : Runnable {
         override fun run() {
             if (!running) return
-            for (address in readyPeers.toList()) {
-                if (rfcomm.readyAddresses().contains(address)) {
-                    rfcomm.send(address, helloPayload())
-                    onDiagnostic("BT_HELLO_TX", "heartbeat address=**${address.takeLast(5)}")
+            val peers = readyPeers.toList()
+            io.execute {
+                for (address in peers) {
+                    if (rfcomm.readyAddresses().contains(address)) {
+                        rfcomm.send(address, helloPayload())
+                        onDiagnostic("BT_HELLO_TX", "heartbeat address=**${address.takeLast(5)}")
+                    }
                 }
             }
             handler.postDelayed(this, PRESENCE_INTERVAL_MS)
@@ -167,7 +174,7 @@ class MeshBluetoothNode(
             return
         }
         val packet = MeshPacket.decode(bytes) ?: run {
-            onDiagnostic("BT_PACKET", "decode_failed address=**\${address.takeLast(5)} bytes=\${bytes.size}")
+            onDiagnostic("BT_PACKET", "decode_failed address=**${address.takeLast(5)} bytes=${bytes.size}")
             return
         }
         handlePacket(address, packet)
@@ -182,14 +189,14 @@ class MeshBluetoothNode(
         peerNodeIds[address] = peerId
         readyPeers.add(address)
         rfcomm.markReady(address)
-        onDiagnostic("BT_READY", "peer=\${peerId.take(12)} address=**\${address.takeLast(5)}")
+        onDiagnostic("BT_READY", "peer=${peerId.take(12)} address=**${address.takeLast(5)}")
         onPeer(peerId, parts[2].trim().ifBlank { peerId.take(8) }, key)
         onPeerCountChanged(peerCount())
         flushQueue()
     }
 
     private fun handlePacket(address: String, packet: MeshPacket) {
-        onDiagnostic("BT_PACKET_RX", "id=\${packet.messageId} src=\${packet.sourceId.take(8)} dst=\${packet.destinationId.take(8)}")
+        onDiagnostic("BT_PACKET_RX", "id=${packet.messageId} src=${packet.sourceId.take(8)} dst=${packet.destinationId.take(8)}")
         val next = router.onReceive(packet)
         if (packet.destinationId == localId) {
             val text = router.decryptForLocal(packet) ?: "[не удалось расшифровать]"
@@ -197,12 +204,12 @@ class MeshBluetoothNode(
                 val deliveredId = text.removePrefix(MeshRouter.DELIVERY_ACK_PREFIX)
                 queue.remove(runCatching { UUID.fromString(deliveredId) }.getOrNull() ?: packet.messageId)
                 onDeliveryAck(deliveredId)
-                onDiagnostic("BT_DELIVERY_ACK", "delivered=\$deliveredId")
+                onDiagnostic("BT_DELIVERY_ACK", "delivered=$deliveredId")
             } else {
                 onMessage(text, packet.sourceId, packet)
                 runCatching { router.createDeliveryAck(packet) }.getOrNull()?.let { sendTo(address, it) }
                 queue.remove(packet.messageId)
-                onDiagnostic("BT_DELIVERED", "id=\${packet.messageId}")
+                onDiagnostic("BT_DELIVERED", "id=${packet.messageId}")
             }
         } else if (next != null) {
             queue.enqueue(next)
@@ -223,13 +230,17 @@ class MeshBluetoothNode(
     }
 
     private fun flushQueue() {
-        for (entry in queue.snapshot()) {
-            for (address in readyPeers.toList()) {
-                if (!rfcomm.readyAddresses().contains(address)) {
-                    readyPeers.remove(address)
-                    continue
+        val entries = queue.snapshot()
+        val peers = readyPeers.toList()
+        io.execute {
+            for (entry in entries) {
+                for (address in peers) {
+                    if (!rfcomm.readyAddresses().contains(address)) {
+                        readyPeers.remove(address)
+                        continue
+                    }
+                    rfcomm.send(address, entry.bytes)
                 }
-                rfcomm.send(address, entry.bytes)
             }
         }
     }
@@ -261,6 +272,7 @@ class MeshBluetoothNode(
         readyPeers.clear()
         peerNodeIds.clear()
         onPeerCountChanged(0)
+        io.shutdownNow()
         onDiagnostic("BT", "stopped")
     }
 
