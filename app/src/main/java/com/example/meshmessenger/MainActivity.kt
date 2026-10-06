@@ -352,21 +352,59 @@ class MainActivity : ComponentActivity() {
             }
             canvas.drawLine(sweepX, horizonY - 2f * density, sweepX, cityBase, sweepPaint)
 
-            // Perspective floor: controlled rails spread across the whole screen.
+            // True TRON flying-over grid: all rails converge on one distant vanishing point.
+            // The phase moves the ground toward the viewer; lines are re-spawned at the horizon.
             val save = canvas.save()
             canvas.clipRect(0f, horizonY, w, h)
-            val rail = linePaint(125, 0.75f)
-            val center = w * .5f
-            val bottomSpread = w * 1.05f
-            for (i in -8..8) {
-                val bottomX = center + i * (bottomSpread / 8f)
-                canvas.drawLine(center, horizonY, bottomX, h, rail)
+
+            val vpX = w * 0.5f
+            val floorH = (h - horizonY).coerceAtLeast(1f)
+            val rail = linePaint(125, 0.72f)
+
+            // Longitudinal rails. They are deliberately sparse at the horizon and wide at
+            // the camera edge, which creates depth instead of a flat running-track look.
+            val railPositions = floatArrayOf(
+                -1.20f, -0.92f, -0.66f, -0.43f, -0.22f, 0f,
+                0.22f, 0.43f, 0.66f, 0.92f, 1.20f
+            )
+            railPositions.forEach { p ->
+                val bottomX = vpX + p * w
+                canvas.drawLine(vpX, horizonY, bottomX, h + 2f, rail)
             }
-            for (i in 0..24) {
-                val t = i / 24f
-                val y = horizonY + (h - horizonY) * t * t
-                canvas.drawLine(0f, y, w, y, linePaint((45 + t * 95).toInt(), 0.65f))
+
+            // Perspective cross-lines. z grows exponentially, so the near field opens up
+            // strongly while the horizon remains dense and distant.
+            val speed = 0.018f
+            val maxZ = 1f
+            val phase01 = (phase / (Math.PI.toFloat() * 2f) * speed) % 1f
+            for (i in 0..22) {
+                val u = (i / 22f + phase01) % 1f
+                val depth = 0.035f + u * u * 0.965f
+                val y = horizonY + floorH * depth
+                val alpha = (45 + depth * 115f).toInt().coerceIn(35, 160)
+                canvas.drawLine(0f, y, w, y, linePaint(alpha, 0.62f + depth * 0.38f))
             }
+
+            // A few brighter "speed" rails reinforce the forward-motion illusion.
+            val speedRail = linePaint(175, 0.95f)
+            val movingDepths = floatArrayOf(0.30f, 0.58f, 0.84f)
+            movingDepths.forEach { base ->
+                val u = (base + phase01 * 1.7f) % 1f
+                val depth = 0.035f + u * u * 0.965f
+                val y = horizonY + floorH * depth
+                canvas.drawLine(0f, y, w, y, speedRail)
+            }
+
+            // Subtle floor atmosphere; it fades toward the camera instead of flattening it.
+            val floorGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = android.graphics.LinearGradient(
+                    0f, horizonY, 0f, h,
+                    intArrayOf(Color.argb(42, 0, 165, 255), Color.argb(8, 0, 90, 150), Color.TRANSPARENT),
+                    floatArrayOf(0f, 0.18f, 1f),
+                    android.graphics.Shader.TileMode.CLAMP
+                )
+            }
+            canvas.drawRect(0f, horizonY, w, h, floorGlow)
             canvas.restoreToCount(save)
 
             val horizon = linePaint(185, 1.05f)
