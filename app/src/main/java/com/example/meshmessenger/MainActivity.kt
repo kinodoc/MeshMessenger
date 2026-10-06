@@ -194,129 +194,31 @@ class MainActivity : ComponentActivity() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-    private class TronBackgroundView(context: Context) : android.view.View(context) {
-        private var phase = 0f
-        private val tick = object : Runnable {
-            override fun run() {
-                phase = (phase + 0.022f) % (Math.PI.toFloat() * 2f)
-                invalidate()
-                postDelayed(this, 33L)
-            }
-        }
-
-        override fun onAttachedToWindow() { super.onAttachedToWindow(); post(tick) }
-        override fun onDetachedFromWindow() { removeCallbacks(tick); super.onDetachedFromWindow() }
-
-        private fun paint(alpha: Int, width: Float): Paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(0, 205, 250)
-            this.alpha = alpha
-            strokeWidth = width * resources.displayMetrics.density
-            style = Paint.Style.STROKE
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            val w = width.toFloat()
-            val h = height.toFloat()
-            if (w <= 0f || h <= 0f) return
-
-            canvas.drawColor(Color.rgb(0, 3, 8))
-            val horizonY = h * 0.505f
-            val cx = w * 0.5f
-
-            val sky = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                shader = android.graphics.LinearGradient(
-                    0f, 0f, 0f, horizonY,
-                    intArrayOf(Color.rgb(0, 2, 7), Color.rgb(1, 8, 15), Color.rgb(3, 28, 40)),
-                    floatArrayOf(0f, 0.72f, 1f),
-                    android.graphics.Shader.TileMode.CLAMP
-                )
-            }
-            canvas.drawRect(0f, 0f, w, horizonY + 2f, sky)
-
-            val horizonGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                shader = android.graphics.LinearGradient(
-                    0f, horizonY - 70f, 0f, horizonY + 55f,
-                    intArrayOf(Color.TRANSPARENT, Color.argb(35, 0, 150, 205), Color.argb(95, 0, 225, 255), Color.TRANSPARENT),
-                    floatArrayOf(0f, 0.42f, 0.60f, 1f),
-                    android.graphics.Shader.TileMode.CLAMP
-                )
-            }
-            canvas.drawRect(0f, horizonY - 70f, w, horizonY + 55f, horizonGlow)
-
-            // Low, dense side-city from the reference: the center stays open.
-            val cityBase = horizonY + 8f
-            val cityFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0, 6, 12) }
-            val cityEdge = paint(105, 0.62f)
-            val cityBright = paint(145, 0.82f)
-
-            fun block(x: Float, width: Float, height: Float, bright: Boolean) {
-                val left = x * w
-                val right = (x + width) * w
-                val top = cityBase - height * h
-                canvas.drawRect(left, top, right, cityBase, cityFill)
-                canvas.drawRect(left, top, right, cityBase, if (bright) cityBright else cityEdge)
-                val bands = maxOf(2, (height * 18f).toInt())
-                for (i in 1 until bands) {
-                    val y = top + (cityBase - top) * i / bands
-                    canvas.drawLine(left + (right-left)*0.12f, y, right - (right-left)*0.08f, y, cityEdge)
-                }
-                if (height > 0.18f) {
-                    canvas.drawLine(left + (right-left)*0.5f, top, left + (right-left)*0.5f, top + (cityBase-top)*0.8f, cityEdge)
+    private class TronVideoBackgroundView(context: Context) : android.widget.VideoView(context) {
+        init {
+            setBackgroundColor(Color.rgb(0, 3, 8))
+            setVideoURI(Uri.parse("android.resource://${context.packageName}/${R.raw.tron_loop}"))
+            setOnPreparedListener { player ->
+                player.isLooping = true
+                player.setVolume(0f, 0f)
+                post {
+                    val videoRatio = player.videoWidth / player.videoHeight.toFloat().coerceAtLeast(1f)
+                    val viewRatio = width / height.toFloat().coerceAtLeast(1f)
+                    if (videoRatio > viewRatio) scaleX = videoRatio / viewRatio
+                    else if (videoRatio < viewRatio) scaleY = viewRatio / videoRatio
+                    start()
                 }
             }
-
-            val blocks = arrayOf(
-                floatArrayOf(0.00f,0.075f,0.13f), floatArrayOf(0.065f,0.10f,0.21f),
-                floatArrayOf(0.145f,0.075f,0.16f), floatArrayOf(0.205f,0.115f,0.25f),
-                floatArrayOf(0.305f,0.08f,0.19f), floatArrayOf(0.37f,0.095f,0.29f),
-                floatArrayOf(0.43f,0.07f,0.16f)
-            )
-            for ((i,b) in blocks.withIndex()) {
-                block(b[0],b[1],b[2],i%3==0)
-                block(1f-b[0]-b[1],b[1],b[2],i%3==0)
+            setOnErrorListener { _, _, _ ->
+                setBackgroundColor(Color.rgb(0, 3, 8))
+                true
             }
-
-            // A single exact vanishing point. Every longitudinal rail begins there.
-            val save = canvas.save()
-            canvas.clipRect(0f, horizonY, w, h)
-            val floorH = (h - horizonY).coerceAtLeast(1f)
-            val rails = floatArrayOf(-1.30f,-1.05f,-0.82f,-0.62f,-0.45f,-0.30f,-0.16f,0f,0.16f,0.30f,0.45f,0.62f,0.82f,1.05f,1.30f)
-            val rail = paint(135, 0.72f)
-            for (p in rails) {
-                canvas.drawLine(cx, horizonY, cx + p*w, h + 2f, rail)
-            }
-
-            // Strictly horizontal cross-lines with perspective spacing.
-            val phase01 = phase / (Math.PI.toFloat()*2f)
-            for (i in 0..29) {
-                val u = (i / 30f + phase01) % 1f
-                val depth = 0.025f + u*u*0.975f
-                val y = horizonY + floorH*depth
-                val a = (42f + depth*108f).toInt().coerceIn(35,155)
-                canvas.drawLine(0f,y,w,y,paint(a,0.60f + depth*0.34f))
-            }
-
-            // Only a few travelling lines, so the grid remains clean.
-            val moving = paint(180, 0.95f)
-            for (base in floatArrayOf(0.23f,0.52f,0.79f)) {
-                val u = (base + phase01*1.35f) % 1f
-                val depth = 0.025f + u*u*0.975f
-                canvas.drawLine(0f,horizonY+floorH*depth,w,horizonY+floorH*depth,moving)
-            }
-            canvas.restoreToCount(save)
-
-            // Reference-style horizon and a small central light, not a giant tower.
-            canvas.drawLine(0f,horizonY,w,horizonY,paint(190,1.05f))
-            val pulse = 0.5f + 0.5f*kotlin.math.sin(phase*1.4f)
-            val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.rgb(0,225,255)
-                alpha = (45f + pulse*40f).toInt()
-            }
-            canvas.drawCircle(cx,horizonY,(3f+pulse*3f)*resources.displayMetrics.density,glow)
+        }
+        override fun onDetachedFromWindow() {
+            runCatching { stopPlayback() }
+            super.onDetachedFromWindow()
         }
     }
-
     private fun homeText(textValue: String, size: Float = 16f): TextView =
         TextView(this).apply {
             text = textValue
