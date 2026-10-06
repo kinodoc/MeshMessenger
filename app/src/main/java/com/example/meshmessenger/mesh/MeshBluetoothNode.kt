@@ -35,7 +35,8 @@ class MeshBluetoothNode(
 ) {
     companion object {
         private const val HELLO_MAGIC = "MESH_HELLO_V1"
-        private const val DISCOVERY_INTERVAL_MS = 20_000L
+        private const val DISCOVERY_INTERVAL_MS = 10_000L
+        private const val PRESENCE_INTERVAL_MS = 10_000L
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -48,7 +49,7 @@ class MeshBluetoothNode(
         context, adapter, MeshProtocol.RFCOMM_SERVICE_UUID,
         { helloPayload() }, onDiagnostic,
         { address, bytes -> handleFrame(address, bytes) },
-        { address -> onDiagnostic("BT_RFCOMM", "connected address=**\${address.takeLast(5)}") },
+        { address -> onDiagnostic("BT_RFCOMM", "connected address=**${address.takeLast(5)}") },
         { address ->
             readyPeers.remove(address)
             peerNodeIds.remove(address)
@@ -91,6 +92,7 @@ class MeshBluetoothNode(
         onDiagnostic("BT", "started transport=RFCOMM")
         startDiscovery()
         handler.postDelayed(discoveryLoop, DISCOVERY_INTERVAL_MS)
+        handler.postDelayed(presenceLoop, PRESENCE_INTERVAL_MS)
     }
 
     private val discoveryLoop = object : Runnable {
@@ -98,6 +100,19 @@ class MeshBluetoothNode(
             if (!running) return
             startDiscovery()
             handler.postDelayed(this, DISCOVERY_INTERVAL_MS)
+        }
+    }
+
+    private val presenceLoop = object : Runnable {
+        override fun run() {
+            if (!running) return
+            for (address in readyPeers.toList()) {
+                if (rfcomm.readyAddresses().contains(address)) {
+                    rfcomm.send(address, helloPayload())
+                    onDiagnostic("BT_HELLO_TX", "heartbeat address=**${address.takeLast(5)}")
+                }
+            }
+            handler.postDelayed(this, PRESENCE_INTERVAL_MS)
         }
     }
 
@@ -224,6 +239,7 @@ class MeshBluetoothNode(
         if (!running) return
         running = false
         handler.removeCallbacks(discoveryLoop)
+        handler.removeCallbacks(presenceLoop)
         runCatching { adapter.cancelDiscovery() }
         rfcomm.stop()
         if (receiverRegistered) runCatching { context.unregisterReceiver(receiver) }
