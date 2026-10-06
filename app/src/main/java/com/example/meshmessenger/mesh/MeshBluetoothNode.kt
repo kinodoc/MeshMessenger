@@ -59,7 +59,9 @@ class MeshBluetoothNode(
     private val receiver = object : BroadcastReceiver() {
         @SuppressLint("MissingPermission")
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (!running || intent?.action != BluetoothDevice.ACTION_FOUND) return
+            if (!running) return
+            val action = intent?.action ?: return
+            if (action != BluetoothDevice.ACTION_FOUND && action != BluetoothDevice.ACTION_ACL_CONNECTED) return
             val device = deviceFromIntent(intent) ?: return
             if (device.address == adapter.address) return
             onDiagnostic("BT_DISCOVERY", "found name=\${runCatching { device.name }.getOrNull().orEmpty().take(32)} address=**\${device.address.takeLast(5)}")
@@ -99,7 +101,7 @@ class MeshBluetoothNode(
     private fun registerReceiver() {
         if (receiverRegistered) return
         ContextCompat.registerReceiver(
-            context, receiver, IntentFilter(BluetoothDevice.ACTION_FOUND),
+            context, receiver, IntentFilter().apply { addAction(BluetoothDevice.ACTION_FOUND); addAction(BluetoothDevice.ACTION_ACL_CONNECTED) },
             ContextCompat.RECEIVER_EXPORTED
         )
         receiverRegistered = true
