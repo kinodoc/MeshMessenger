@@ -64,8 +64,12 @@ class MeshBluetoothNode(
             if (action != BluetoothDevice.ACTION_FOUND && action != BluetoothDevice.ACTION_ACL_CONNECTED) return
             val device = deviceFromIntent(intent) ?: return
             if (device.address == adapter.address) return
-            onDiagnostic("BT_DISCOVERY", "found name=\${runCatching { device.name }.getOrNull().orEmpty().take(32)} address=**\${device.address.takeLast(5)}")
-            rfcomm.connect(device.address, MeshProtocol.RFCOMM_SERVICE_UUID)
+            onDiagnostic("BT_DISCOVERY", "found name=" + runCatching { device.name }.getOrNull().orEmpty().take(32) + " address=**" + device.address.takeLast(5))
+            if (shouldInitiate(device.address)) {
+                rfcomm.connect(device.address, MeshProtocol.RFCOMM_SERVICE_UUID)
+            } else {
+                onDiagnostic("BT_DISCOVERY", "passive_peer address=**" + device.address.takeLast(5))
+            }
         }
     }
 
@@ -111,7 +115,14 @@ class MeshBluetoothNode(
     private fun startDiscovery() {
         if (!running || !adapter.isEnabled) return
         runCatching { adapter.cancelDiscovery() }
-        onDiagnostic("BT_DISCOVERY", "start=\${runCatching { adapter.startDiscovery() }.getOrDefault(false)}")
+        val started = runCatching { adapter.startDiscovery() }.getOrDefault(false)
+        onDiagnostic("BT_DISCOVERY", "start=" + started)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun shouldInitiate(address: String): Boolean {
+        val local = runCatching { adapter.address }.getOrDefault("")
+        return local.isNotBlank() && local < address
     }
 
     private fun helloPayload(): ByteArray {
