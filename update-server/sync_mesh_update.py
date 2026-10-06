@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+import hashlib
+import json
+import os
+import re
+import tempfile
+import urllib.request
+
+REPO = "kinodoc/MeshMessenger"
+ROOT = "/var/www/html/mesh-update"
+API = f"https://api.github.com/repos/{REPO}/releases/latest"
+USER_AGENT = "MeshMessenger-VPS-Updater/1.0"
+
+
+def get(url: str) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=30) as response:
+        return response.read()
+
+
+def atomic_write(path: str, data: bytes) -> None:
+    fd, tmp = tempfile.mkstemp(prefix=".mesh-", dir=ROOT)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def main() -> None:
+    os.makedirs(ROOT, mode=0o755, exist_ok=True)
+
+    release = json.loads(get(API).decode("utf-8"))
+    tag = release.get("tag_name", "").removeprefix("v")
+    assets = release.get("assets") or []
+    apk = next(
+        (a for a in assets
+         if a.get("name", "").lower().endswith(".apk")
+         and a.get("name", "").startswith("MeshMessenger")),
+        None,
+    )
+    if not tag or not apk:
+        raise RuntimeError("Latest GitHub release has no MeshMessenger APK")
+
+    state_path = os.path.join(ROOT, "state.json")
+    if os.path.exists(state_path):
+        try:
+            state = json.loads(open(state_path, encoding="utf-8").read())
+            if state.get("tag") == tag and os.path.isfile(os.path.join(ROOT, state.get("apkName", ""))):
+                return
+        except Exception:
+            pass
+
+    gradle_url = f"https://raw.githubusercontent.com/{REPO}/{release['tag_name']}/app/build.gradle.kts"
+    gradle = get(gradle_url).decode("utf-8")
+    match = re.search(r"versionCode\s*=\s*(\d+)", gradle)
+    if not match:
+        raise RuntimeError("versionCode not found in release source")
+    version_code = int(match.group(1))
+
+    apk_name = apk["name"]
+    apk_url = apk["browser_download_url"]
+    apk_bytes = get(apk_url)
+    if len(apk_bytes) < 100_000:
+        raise RuntimeError("Downloaded APK is unexpectedly small")
+
+    sha256 = hashlib.sha256(apk_bytes).hexdigest()
+    final_apk = os.path.join(ROOT, apk_name)
+    atomic_write(final_apk, apk_bytes)
+
+    update = {
+        "version": tag,
+        "versionCode": version_code,
+        "apkName": apk_name,
+        "apkUrl": f"https://194.87.186.159/mesh-update/{apk_name}",
+        "sha256": sha256,
+        "size": len(apk_bytes),
+    }
+    atomic_write(os.path.join(ROOT, "update.json"), (json.dumps(update, indent=2) + "\n").encode())
+    atomic_write(os.path.join(ROOT, "state.json"), (json.dumps({"tag": tag, "apkName": apk_name}) + "\n").encode())
+
+    print(f"Published MeshMessenger {tag} ({version_code}), {len(apk_bytes)} bytes")
+
+
+if __name__ == "__main__":
+    main()
