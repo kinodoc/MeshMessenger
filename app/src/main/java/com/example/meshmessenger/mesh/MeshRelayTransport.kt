@@ -1,6 +1,10 @@
 package com.example.meshmessenger.mesh
 
 import android.util.Base64
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.util.Log
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -8,6 +12,7 @@ import java.io.BufferedWriter
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.InetSocketAddress
+import java.net.Socket
 import java.security.MessageDigest
 import java.security.cert.X509Certificate
 import java.util.concurrent.ConcurrentHashMap
@@ -130,8 +135,7 @@ class MeshRelayTransport(
         while (running.get()) {
             try {
                 onDiagnostic("RELAY_CONNECT", "state=attempt")
-                val s = sslContext.socketFactory.createSocket() as SSLSocket
-                s.connect(InetSocketAddress(HOST, PORT), 8000)
+                val s = openRelaySocket()
                 s.soTimeout = 0
                 s.startHandshake()
                 onDiagnostic("RELAY_CONNECT", "state=connected tls=ok")
@@ -169,6 +173,34 @@ class MeshRelayTransport(
                 delay = (delay * 2).coerceAtMost(30000L)
             }
         }
+    }
+
+    private fun openRelaySocket(): SSLSocket {
+        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val networks = runCatching { manager.allNetworks.toList() }.getOrDefault(emptyList())
+        val active = runCatching { manager.activeNetwork }.getOrNull()
+        fun caps(n: Network): NetworkCapabilities? = runCatching { manager.getNetworkCapabilities(n) }.getOrNull()
+        val directValidated = networks.firstOrNull { n ->
+            val c = caps(n) ?: return@firstOrNull false
+            c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                c.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) &&
+                c.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+        }
+        val directInternet = networks.firstOrNull { n ->
+            val c = caps(n) ?: return@firstOrNull false
+            c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                c.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+        }
+        val network = directValidated ?: directInternet ?: active
+        val c = network?.let(::caps)
+        val raw: Socket = network?.socketFactory?.createSocket() ?: Socket()
+        raw.connect(InetSocketAddress(HOST, PORT), 8000)
+        onDiagnostic("RELAY_NETWORK", "selected=" + when {
+            c?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) == true -> "direct"
+            c?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true -> "vpn"
+            else -> "default"
+        })
+        return sslContext.socketFactory.createSocket(raw, HOST, PORT, true) as SSLSocket
     }
 
     private fun handleServerMessage(msg: JSONObject) {
