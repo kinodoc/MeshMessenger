@@ -987,36 +987,65 @@ class MainActivity : ComponentActivity() {
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         contacts.all().forEach { contact ->
             list.addView(LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(16, 14, 16, 14)
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(18, 15, 18, 15)
                 background = android.graphics.drawable.GradientDrawable().apply {
-                    cornerRadius = 16f
-                    setColor(0xFF0A111A.toInt())
-                    setStroke(1, 0xFF164B61.toInt())
+                    cornerRadius = 18f
+                    setColor(0xFF07131F.toInt())
+                    setStroke(1, 0xFF17647A.toInt())
                 }
+                elevation = dp(3).toFloat()
                 setOnClickListener { dialog.dismiss(); openChat(contact) }
-                post { val lp = layoutParams; if (width > 0 && lp != null) { lp.height = width; layoutParams = lp } }
-                addView(TextView(this@MainActivity).apply {
+
+                val avatar = TextView(this@MainActivity).apply {
+                    text = contact.name.trim().firstOrNull()?.uppercase() ?: "?"
+                    textSize = 22f
+                    typeface = Typeface.create("monospace", Typeface.BOLD)
+                    gravity = android.view.Gravity.CENTER
+                    setTextColor(0xFF00E5FF.toInt())
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = 14f
+                        setColor(0xFF0A2531.toInt())
+                        setStroke(1, 0xFF00AFC9.toInt())
+                    }
+                    layoutParams = LinearLayout.LayoutParams(dp(58), dp(58)).apply {
+                        rightMargin = dp(15)
+                    }
+                }
+
+                val info = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = android.view.Gravity.CENTER_VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+                }
+                info.addView(TextView(this@MainActivity).apply {
                     text = contact.name
                     textSize = 18f
+                    typeface = Typeface.create("monospace", Typeface.BOLD)
                     setTextColor(0xFFE7F7FF.toInt())
                 })
-                addView(TextView(this@MainActivity).apply {
-                    text = "NODE ID  ${contact.nodeId}"
+                info.addView(TextView(this@MainActivity).apply {
+                    text = "NODE  ${contact.nodeId.take(16)}"
                     textSize = 10f
+                    typeface = Typeface.create("monospace", Typeface.NORMAL)
                     setTextColor(0xFF6B8799.toInt())
-                    setPadding(0, 4, 0, 0)
+                    setPadding(0, dp(4), 0, 0)
                 })
-                addView(TextView(this@MainActivity).apply {
+                info.addView(TextView(this@MainActivity).apply {
                     val lastSeen = contact.lastSeenAt
                     val online = lastSeen > 0L && System.currentTimeMillis() - lastSeen <= 30_000L
                     text = if (online) "● В СЕТИ" else "● НЕ В СЕТИ"
                     textSize = 11f
-                    setTextColor(if (online) 0xFF00FF9D.toInt() else 0xFF6B8799.toInt())
-                    setPadding(0, 5, 0, 0)
+                    typeface = Typeface.create("monospace", Typeface.BOLD)
+                    setTextColor(if (online) 0xFF00FF9D.toInt() else 0xFF607C8D.toInt())
+                    setPadding(0, dp(5), 0, 0)
                 })
-            }.also { (it.layoutParams as? LinearLayout.LayoutParams)?.setMargins(0, 0, 0, 10) })
-        }
+                addView(avatar)
+                addView(info)
+            }.also {
+                (it.layoutParams as? LinearLayout.LayoutParams)?.setMargins(0, 0, 0, dp(10))
+            })
         if (contacts.all().isEmpty()) {
             list.addView(TextView(this).apply {
                 text = "Контакты появятся автоматически после первого сообщения.\n\nNode ID используется как уникальный идентификатор."
