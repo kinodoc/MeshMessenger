@@ -53,112 +53,50 @@ class MeshGattNode(
     private val notifyReady = mutableSetOf<String>()
     private val gattReady = mutableSetOf<String>()
     private val service = MeshProtocol.SERVICE_UUID
-    private val localRfcommUuid = MeshProtocol.RFCOMM_SERVICE_UUID
     private val rx = MeshProtocol.RX_UUID
     private val tx = MeshProtocol.TX_UUID
     private val allocator = MeshProtocol.ALLOCATOR_UUID
     private val cccd = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-    private val l2capTransport = MeshL2capTransport(
-        context = context,
-        adapter = adapter,
-        localId = localId,
-        helloPayload = {
-            val key = Base64.getEncoder().encodeToString(localPublicKey)
-            listOf(HELLO_MAGIC, localId, localName.take(64), key)
-                .joinToString("|").toByteArray(StandardCharsets.UTF_8)
-        },
-        onDiagnostic = onDiagnostic,
-        onFrame = { address, bytes -> handleIncomingFragment(address, bytes) },
-        onConnected = { address ->
-            onDiagnostic("BLE_L2CAP", "transport_connected address=**" + address.takeLast(5))
-        },
-        onDisconnected = { address ->
-            gattReady.remove(address)
-            peerNodeIds.remove(address)
-            onPeerCountChanged(peerCount())
-            onDiagnostic("BLE_L2CAP", "transport_disconnected address=**" + address.takeLast(5))
-        }
-    )
-    private val rfcommTransport = MeshRfcommTransport(
-        context = context,
-        adapter = adapter,
-        serviceUuid = localRfcommUuid,
-        helloPayload = {
-            val key = Base64.getEncoder().encodeToString(localPublicKey)
-            listOf(HELLO_MAGIC, localId, localName.take(64), key)
-                .joinToString("|").toByteArray(StandardCharsets.UTF_8)
-        },
-        onDiagnostic = onDiagnostic,
-        onFrame = { address, bytes -> handleIncomingFragment(address, bytes) },
-        onConnected = { address ->
-            onDiagnostic("BLE_RFCOMM", "transport_connected address=**" + address.takeLast(5))
-        },
-        onDisconnected = { address ->
-            peerNodeIds.remove(address)
-            peerLastSeenAt.entries.removeIf { it.value <= System.currentTimeMillis() }
-            onPeerCountChanged(peerCount())
-            onDiagnostic("BLE_RFCOMM", "transport_disconnected address=**" + address.takeLast(5))
-        }
-    )
     private val rxCharacteristic = BluetoothGattCharacteristic(rx, BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE, BluetoothGattCharacteristic.PERMISSION_WRITE)
     private val txCharacteristic = BluetoothGattCharacteristic(tx, BluetoothGattCharacteristic.PROPERTY_NOTIFY, BluetoothGattCharacteristic.PERMISSION_READ)
     private val allocatorCharacteristic = BluetoothGattCharacteristic(allocator, BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE, BluetoothGattCharacteristic.PERMISSION_READ or BluetoothGattCharacteristic.PERMISSION_WRITE)
     private val descriptor = BluetoothGattDescriptor(cccd, BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE)
     private val allocatorSessions = ConcurrentHashMap<String, ByteArray>()
-    private val blessedCentral = MeshBlessedCentral(
-        context = context,
-        localId = localId,
-        serviceUuid = service,
-        rxUuid = rx,
-        txUuid = tx,
-        allocatorUuid = allocator,
-        helloPayload = {
+    private val nativeCentral = MeshNativeCentral(
+        context, localId, service, rx, tx, allocator,
+        {
             val key = Base64.getEncoder().encodeToString(localPublicKey)
-            listOf(HELLO_MAGIC, localId, localName.take(64), key)
-                .joinToString("|").toByteArray(StandardCharsets.UTF_8)
+            listOf(HELLO_MAGIC, localId, localName.take(64), key).joinToString("|").toByteArray(StandardCharsets.UTF_8)
         },
-        onDiagnostic = onDiagnostic,
-        onFragment = { address, bytes -> handleIncomingFragment(address, bytes) },
-        onL2capPeer = { peripheral, _, remotePsm ->
-            if (l2capTransport.isSupported()) {
-                val device = adapter.getRemoteDevice(peripheral.address)
-                l2capTransport.connect(device, remotePsm)
-            }
-        },
-        onRfcommPeer = { peripheral ->
-            rfcommTransport.connect(peripheral.address, MeshProtocol.RFCOMM_SERVICE_UUID)
-        },
-        onReady = { address, ready ->
+        onDiagnostic,
+        { address, bytes -> handleIncomingFragment(address, bytes) },
+        { address, ready ->
             if (ready) {
                 gattReady.add(address)
-                onDiagnostic("BLE_BLESSED_READY", "ready=true address=**" + address.takeLast(5))
+                onDiagnostic("BLE_GATT_READY", "ready=true address=**" + address.takeLast(5))
                 onPeerCountChanged(peerCount())
                 flushQueue()
             } else {
                 gattReady.remove(address)
                 writing.remove(address)
-                onDiagnostic("BLE_BLESSED_READY", "ready=false address=**" + address.takeLast(5))
+                onDiagnostic("BLE_GATT_READY", "ready=false address=**" + address.takeLast(5))
                 onPeerCountChanged(peerCount())
             }
         },
-        onWrite = { address, ok ->
+        { address, ok ->
             if (writing.remove(address)) {
                 writeTimeouts.remove(address)?.cancel(false)
-            val queueForPeer = writeQueues[address]
-            val task = queueForPeer?.firstOrNull()
-            if (!ok) {
-                onDiagnostic("BLE_BLESSED_WRITE", "packet_failed address=**" + address.takeLast(5))
-                queueForPeer?.removeFirstOrNull()
-            } else if (task != null) {
-                val remaining = task.fragments.drop(1)
-                queueForPeer.removeFirst()
-                if (remaining.isEmpty()) {
-                    if (queue.snapshot().any { it.id == task.messageId }) {
+                val q = writeQueues[address]
+                val task = q?.firstOrNull()
+                if (!ok) q?.removeFirstOrNull()
+                else if (task != null) {
+                    val remaining = task.fragments.drop(1)
+                    q.removeFirst()
+                    if (remaining.isEmpty() && queue.snapshot().any { it.id == task.messageId })
                         awaitingDelivery.getOrPut(address) { mutableMapOf() }[task.messageId] = System.currentTimeMillis()
-                    }
-                } else queueForPeer.addFirst(task.copy(fragments = remaining))
-            }
-            if (queueForPeer?.isEmpty() == true) writeQueues.remove(address)
+                    else if (remaining.isNotEmpty()) q.addFirst(task.copy(fragments = remaining))
+                }
+                if (q?.isEmpty() == true) writeQueues.remove(address)
                 flushPeerQueue(address)
             }
         }
@@ -205,7 +143,6 @@ class MeshGattNode(
     @SuppressLint("MissingPermission")
     fun start() {
         if (Build.VERSION.SDK_INT >= 31 && context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
-        rfcommTransport.start()
         server = manager.openGattServer(context, object : BluetoothGattServerCallback() {
             override fun onServiceAdded(status: Int, service: BluetoothGattService) {
                 if (service.uuid == this@MeshGattNode.service && status == BluetoothGatt.GATT_SUCCESS) {
@@ -260,9 +197,8 @@ class MeshGattNode(
                         "client_connected address=**" + device.address.takeLast(5) +
                             " server_clients=" + serverClients.size + " ready=" + gattReady.size
                     )
-                    // BLESSED owns the central connection lifecycle. A peripheral-side
-                    // connection is not enough to mark a peer online; wait for the
-                    // application HELLO handshake below.
+                    // A peripheral-side connection is not enough to mark a peer online;
+                    // wait for the application HELLO handshake below.
                     onDiagnostic("BLE_GATT_SERVER", "waiting_for_hello address=**" + device.address.takeLast(5))
                 } else {
                     serverClients.remove(device.address)
@@ -310,41 +246,15 @@ class MeshGattNode(
 
         advertiser = adapter.bluetoothLeAdvertiser
         val adv = advertiser ?: run { onStatus("BLE advertising недоступен"); return }
-        l2capTransport.start()
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
             .setConnectable(true)
             .build()
-        // Briar's BLE/L2CAP model keeps the service UUID in the primary
-        // advertisement and publishes the dynamic L2CAP PSM as a 4-byte uint32
-        // service-data value in the scan response. Keep our stable Node ID in
-        // manufacturer data so the older GATT fallback can still elect an
-        // initiator without consuming the PSM service-data slot.
         val nodeIdBytes = localId.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-        val data = AdvertiseData.Builder()
-            .setIncludeDeviceName(false)
-            .addServiceUuid(ParcelUuid(service))
-            .build()
-        // Keep the primary packet to service UUID only. A 128-bit UUID plus
-        // manufacturer data can exceed the legacy 31-byte advertising budget
-        // on Android 8/11 OEM stacks and causes ADVERTISE_FAILED_DATA_TOO_LARGE.
-        // Put the stable Node ID in the scan response; on API 29+ prepend the
-        // dynamic L2CAP PSM, yielding [PSM(4) + NodeId(8)].
-        val scanPayload = if (l2capTransport.psm > 0) {
-            val psm = l2capTransport.psm
-            byteArrayOf(
-                (psm ushr 24).toByte(),
-                (psm ushr 16).toByte(),
-                (psm ushr 8).toByte(),
-                psm.toByte()
-            ) + nodeIdBytes
-        } else {
-            nodeIdBytes
-        }
-        val scanResponse = AdvertiseData.Builder()
-            .addServiceData(ParcelUuid(service), scanPayload)
-            .build()
+        val data = AdvertiseData.Builder().setIncludeDeviceName(false)
+            .addServiceUuid(ParcelUuid(service)).addManufacturerData(0xFFFF, nodeIdBytes).build()
+        val scanResponse = AdvertiseData.Builder().build()
 
         var retriedWithoutScanResponse = false
         advertiseCallback = object : AdvertiseCallback() {
@@ -386,11 +296,7 @@ class MeshGattNode(
         runCatching { adv.startAdvertising(settings, data, scanResponse, advertiseCallback!!) }
             .onFailure { onDiagnostic("BLE_ADVERTISE", "start_exception=" + it.javaClass.simpleName) }
 
-        // BLESSED owns the central-side scan/connect/GATT operation queue.
-        // Do not run the raw BluetoothLeScanner path in parallel.
-        blessedCentral.start()
-        onDiagnostic("BLE_BLESSED", "central_transport_enabled")
-        return
+        nativeCentral.start()
     }
 
     @SuppressLint("MissingPermission")
@@ -412,7 +318,7 @@ class MeshGattNode(
                 val peerId = parts[1].trim()
                 if (peerId == localId) return
                 peerNodeIds[from] = peerId
-                blessedCentral.markPeerHello(from)
+                nativeCentral.markPeerHello(from)
                 val duplicateAddress = peerNodeIds.entries.firstOrNull { it.value == peerId && it.key != from }?.key
                 if (duplicateAddress != null) {
                     // Same application identity reached us through a rotated BLE
@@ -423,16 +329,8 @@ class MeshGattNode(
                 }
                 val key = runCatching { Base64.getDecoder().decode(parts[3]) }.getOrNull()
                 if (key != null && key.isNotEmpty()) {
-                    // L2CAP has its own socket/handshake lifecycle and must not be
-                    // gated by the GATT-ready set. If this HELLO arrived over an
-                    // L2CAP socket, mark that socket application-ready directly.
-                    val rfcommHello = rfcommTransport.markReady(from)
-                    val l2capHello = if (!rfcommHello) l2capTransport.markReady(from) else true
-                    if (!rfcommHello && !l2capHello) {
-                        // GATT fallback reaches the same application-ready boundary.
-                        gattReady.add(from)
-                        blessedCentral.markPeerHello(from)
-                    }
+                    gattReady.add(from)
+                    nativeCentral.markPeerHello(from)
                     peerLastSeenAt[peerId] = System.currentTimeMillis()
                     onDiagnostic("BLE_GATT_READY", "server_hello=true address=**" + from.takeLast(5))
                     onPeer(peerId, parts[2].ifBlank { peerId.take(8) }, key)
@@ -567,42 +465,13 @@ class MeshGattNode(
         // The peer-count callback schedules retryPending() when a peer appears;
         // calling it back here creates an infinite main-thread recursion:
         // peer-count -> retryPending -> peer-count -> ...
-        if (serverClients.isEmpty() && blessedCentral.readyAddresses().isEmpty() &&
-            l2capTransport.readyAddresses().isEmpty() && rfcommTransport.readyAddresses().isEmpty()) return
+        if (serverClients.isEmpty() && nativeCentral.readyAddresses().isEmpty()) return
         flushQueue()
     }
 
     @SuppressLint("MissingPermission")
     private fun flushQueue() {
         val entries = queue.snapshot()
-
-        // Classic Bluetooth RFCOMM is the primary Briar-style Bluetooth transport.
-        val rfcommReady = rfcommTransport.readyAddresses()
-        for (address in rfcommReady) {
-            for (entry in entries) {
-                val waitingSince = awaitingDelivery[address]?.get(entry.id)
-                if (waitingSince != null && System.currentTimeMillis() - waitingSince < DELIVERY_RETRY_MS) continue
-                if (waitingSince != null) awaitingDelivery[address]?.remove(entry.id)
-                if (rfcommTransport.send(address, entry.bytes)) {
-                    awaitingDelivery.getOrPut(address) { mutableMapOf() }[entry.id] = System.currentTimeMillis()
-                }
-            }
-        }
-
-        // API 29+ peers may also use the existing L2CAP CoC transport. The socket is
-        // considered application-ready only after the same HELLO exchange used
-        // by the GATT fallback has completed.
-        val l2capReady = l2capTransport.readyAddresses()
-        for (address in l2capReady) {
-            for (entry in entries) {
-                val waitingSince = awaitingDelivery[address]?.get(entry.id)
-                if (waitingSince != null && System.currentTimeMillis() - waitingSince < DELIVERY_RETRY_MS) continue
-                if (waitingSince != null) awaitingDelivery[address]?.remove(entry.id)
-                if (l2capTransport.send(address, entry.bytes)) {
-                    awaitingDelivery.getOrPut(address) { mutableMapOf() }[entry.id] = System.currentTimeMillis()
-                }
-            }
-        }
 
         // A peer may exist only on the GATT-server side. The previous code
         // tracked those clients but never sent the durable outgoing queue to them.
@@ -624,7 +493,7 @@ class MeshGattNode(
         }
 
         // Application packets require the complete GATT setup and HELLO handshake.
-        val ready = blessedCentral.readyAddresses().toList()
+        val ready = nativeCentral.readyAddresses().toList()
         for (address in ready) {
             for (entry in entries) {
                 val waitingSince = awaitingDelivery[address]?.get(entry.id)
@@ -643,24 +512,22 @@ class MeshGattNode(
     @SuppressLint("MissingPermission")
     private fun flushPeerQueue(address: String) {
         if (writing.contains(address)) return
-        if (!blessedCentral.readyAddresses().contains(address)) return
+        if (!nativeCentral.readyAddresses().contains(address)) return
         val task = writeQueues[address]?.firstOrNull() ?: return
         val part = task.fragments.firstOrNull() ?: return
 
-        // BLESSED is the sole owner of central-side GATT writes. There is no
-        // legacy BluetoothGatt fallback: having two GATT implementations in
-        // parallel was the source of duplicate connections and status 133.
+        // Native Android BluetoothGatt is the only central-side GATT owner.
         writing.add(address)
-        val started = blessedCentral.write(address, part)
+        val started = nativeCentral.write(address, part)
         if (!started) {
             writing.remove(address)
-            onDiagnostic("BLE_BLESSED_WRITE", "start_failed address=**" + address.takeLast(5))
+            onDiagnostic("BLE_GATT_WRITE", "start_failed address=**" + address.takeLast(5))
             return
         }
         writeTimeouts.remove(address)?.cancel(false)
         writeTimeouts[address] = writeTimeoutExecutor.schedule({
             if (!writing.remove(address)) return@schedule
-            onDiagnostic("BLE_BLESSED_WRITE_TIMEOUT", "address=**" + address.takeLast(5) + ",timeout_ms=" + GATT_WRITE_TIMEOUT_MS)
+            onDiagnostic("BLE_GATT_WRITE_TIMEOUT", "address=**" + address.takeLast(5) + ",timeout_ms=" + GATT_WRITE_TIMEOUT_MS)
             writeQueues.remove(address)
         }, GATT_WRITE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
     }
@@ -701,13 +568,6 @@ class MeshGattNode(
 
     @SuppressLint("MissingPermission")
     private fun broadcast(bytes: ByteArray, except: String? = null) {
-        // L2CAP carries complete MeshPacket frames directly; GATT keeps the
-        // existing 180-byte fragmentation path for the compatibility fallback.
-        for (address in l2capTransport.readyAddresses()) {
-            if (address == except) continue
-            l2capTransport.send(address, bytes)
-        }
-
         val fragments = runCatching { fragment(bytes) }.getOrNull() ?: return
         val devices = LinkedHashMap<String, BluetoothDevice>()
         for ((address, device) in serverClients.toMap()) devices[address] = device
@@ -721,9 +581,7 @@ class MeshGattNode(
         // Online means application READY, not merely GATT connected. Both sides
         // reach READY only after the HELLO handshake has completed.
         val readyAddresses = gattReady.toMutableSet().apply {
-            addAll(blessedCentral.readyAddresses())
-            addAll(l2capTransport.readyAddresses())
-            addAll(rfcommTransport.readyAddresses())
+            addAll(nativeCentral.readyAddresses())
         }
         val uniquePeers = mutableSetOf<String>()
         for (address in readyAddresses) uniquePeers.add(peerNodeIds[address] ?: address)
@@ -734,16 +592,14 @@ class MeshGattNode(
 
     /** True when at least one BLE transport completed the application handshake. */
     fun isBleTransportReady(): Boolean =
-        rfcommTransport.readyAddresses().isNotEmpty() ||
-            l2capTransport.readyAddresses().isNotEmpty() ||
-            gattReady.isNotEmpty() || blessedCentral.isReady()
+        gattReady.isNotEmpty() || nativeCentral.isReady()
 
-    /** True when the core BLE/GATT transport is running. L2CAP is an optional
-     * optimization on API 29+ and must never make the GATT fallback unhealthy. */
+
+    /** True when the single native BLE/GATT transport is running. */
     fun isHealthy(): Boolean = runCatching {
         adapter.isEnabled && gattServerReady && server != null &&
             advertisingStarted && advertiser != null &&
-            blessedCentral.isRunning()
+            nativeCentral.isRunning()
     }.getOrDefault(false)
 
     fun stop() {
@@ -762,9 +618,7 @@ class MeshGattNode(
         advertiseCallback = null
         advertiser = null
         advertisingStarted = false
-        runCatching { blessedCentral.stop() }
-        runCatching { l2capTransport.stop() }
-        runCatching { rfcommTransport.stop() }
+        runCatching { nativeCentral.stop() }
         serverClients.clear()
         peerNodeIds.clear()
         peerLastSeenAt.clear()
