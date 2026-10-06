@@ -22,7 +22,7 @@ class MeshRfcommTransport(
     private val adapter: BluetoothAdapter,
     private val serviceUuid: UUID,
     private val helloPayload: () -> ByteArray,
-    private val onDiagnostic: (String, String) -> Unit,
+    private val onDiagnostic: (String, String) -> Unit,\n    private val helloPayload: () -> ByteArray,
     private val onFrame: (String, ByteArray) -> Unit,
     private val onConnected: (String) -> Unit,
     private val onDisconnected: (String) -> Unit
