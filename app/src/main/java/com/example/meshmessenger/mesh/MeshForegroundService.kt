@@ -420,12 +420,15 @@ class MeshForegroundService : Service() {
 
 
     private fun sendDeliveryStatus(packetId: String) {
-        android.util.Log.i("MeshBluetoothDiag", "delivery_status_broadcast packetId=$packetId")
+        android.util.Log.i("MeshBluetoothDiag", "delivery_status packetId=$packetId")
         if (packetId.isBlank()) return
         runCatching {
             val id = java.util.UUID.fromString(packetId)
             pendingMesh.remove(id)
         }
+        chats.updateDelivery(packetId, ChatStore.Delivery.DELIVERED)
+        diagnostics.event("DELIVERY_STATUS", "delivered=$packetId")
+        sendBroadcast(Intent(ACTION_MESH_DELIVERED).apply {
         sendBroadcast(Intent(ACTION_MESH_DELIVERED).apply {
             setPackage(packageName)
             putExtra(EXTRA_DELIVERED_PACKET_ID, packetId)
