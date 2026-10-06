@@ -35,7 +35,7 @@ class MeshBluetoothNode(
 ) {
     companion object {
         private const val HELLO_MAGIC = "MESH_HELLO_V1"
-        private const val DISCOVERY_INTERVAL_MS = 10_000L
+        private const val DISCOVERY_INTERVAL_MS = 20_000L
         private const val PRESENCE_INTERVAL_MS = 10_000L
     }
 
@@ -137,9 +137,15 @@ class MeshBluetoothNode(
     @SuppressLint("MissingPermission")
     private fun startDiscovery() {
         if (!running || !adapter.isEnabled) return
-        runCatching { adapter.cancelDiscovery() }
+        if (runCatching { adapter.isDiscovering }.getOrDefault(false)) {
+            onDiagnostic("BT_DISCOVERY", "already_active")
+            return
+        }
         val started = runCatching { adapter.startDiscovery() }.getOrDefault(false)
         onDiagnostic("BT_DISCOVERY", "start=" + started)
+        if (!started) {
+            handler.postDelayed({ if (running) startDiscovery() }, 1500L)
+        }
     }
 
     @SuppressLint("MissingPermission")
