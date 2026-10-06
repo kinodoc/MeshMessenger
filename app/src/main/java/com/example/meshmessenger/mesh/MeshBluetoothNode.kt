@@ -49,7 +49,10 @@ class MeshBluetoothNode(
         context, adapter, MeshProtocol.RFCOMM_SERVICE_UUID,
         { helloPayload() }, onDiagnostic,
         { address, bytes -> handleFrame(address, bytes) },
-        { address -> onDiagnostic("BT_RFCOMM", "connected address=**${address.takeLast(5)}") },
+        { address ->
+            onDiagnostic("BT_RFCOMM", "connected address=**${address.takeLast(5)}")
+            handler.postDelayed({ if (running) startDiscovery() }, 750L)
+        },
         { address ->
             readyPeers.remove(address)
             peerNodeIds.remove(address)
