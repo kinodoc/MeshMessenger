@@ -263,7 +263,7 @@ class MainActivity : ComponentActivity() {
         scroll.addView(root)
         val rootBackground = FrameLayout(this).apply {
             setBackgroundColor(Color.rgb(2, 8, 19))
-            addView(TronBackgroundView(this@MainActivity), FrameLayout.LayoutParams(-1, -1))
+            addView(TronVideoBackgroundView(this@MainActivity), FrameLayout.LayoutParams(-1, -1))
             addView(scroll, FrameLayout.LayoutParams(-1, -1))
         }
 
@@ -1109,7 +1109,7 @@ class MainActivity : ComponentActivity() {
 
         val chatFrame = FrameLayout(this).apply {
             setBackgroundColor(Color.rgb(2, 8, 19))
-            addView(TronBackgroundView(this@MainActivity), FrameLayout.LayoutParams(-1, -1))
+            addView(TronVideoBackgroundView(this@MainActivity), FrameLayout.LayoutParams(-1, -1))
             addView(root, FrameLayout.LayoutParams(-1, -1))
         }
 
