@@ -35,7 +35,8 @@ class MeshBluetoothNode(
 ) {
     companion object {
         private const val HELLO_MAGIC = "MESH_HELLO_V1"
-        private const val DISCOVERY_INTERVAL_MS = 20_000L
+        private const val INITIAL_DISCOVERY_DELAY_MS = 10_000L
+        private const val MAX_DISCOVERY_DELAY_MS = 120_000L
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -43,6 +44,9 @@ class MeshBluetoothNode(
     private val readyPeers = ConcurrentHashMap.newKeySet<String>()
     private var receiverRegistered = false
     private var running = false
+    private var discoveryInProgress = false
+    private var discoveryDelayMs = INITIAL_DISCOVERY_DELAY_MS
+    private var discoveryScheduled = false
 
     private val rfcomm = MeshRfcommTransport(
         context, adapter, MeshProtocol.RFCOMM_SERVICE_UUID,
@@ -61,9 +65,28 @@ class MeshBluetoothNode(
         override fun onReceive(context: Context?, intent: Intent?) {
             if (!running) return
             val action = intent?.action ?: return
+            if (action == BluetoothAdapter.ACTION_DISCOVERY_STARTED) {
+                discoveryInProgress = true
+                onDiagnostic("BT_DISCOVERY", "started")
+                return
+            }
+            if (action == BluetoothAdapter.ACTION_DISCOVERY_FINISHED) {
+                discoveryInProgress = false
+                discoveryScheduled = false
+                val bonded = runCatching { adapter.bondedDevices }.getOrDefault(emptySet())
+                bonded.forEach { device ->
+                    if (isUsableClassicDevice(device) && shouldInitiate(device.address)) {
+                        onDiagnostic("BT_DISCOVERY", "bonded_peer address=**" + device.address.takeLast(5))
+                        rfcomm.connect(device.address, MeshProtocol.RFCOMM_SERVICE_UUID)
+                    }
+                }
+                discoveryDelayMs = (discoveryDelayMs * 2).coerceAtMost(MAX_DISCOVERY_DELAY_MS)
+                scheduleDiscovery(discoveryDelayMs)
+                return
+            }
             if (action != BluetoothDevice.ACTION_FOUND && action != BluetoothDevice.ACTION_ACL_CONNECTED) return
             val device = deviceFromIntent(intent) ?: return
-            if (device.address == adapter.address) return
+            if (!isUsableClassicDevice(device) || device.address == adapter.address) return
             onDiagnostic("BT_DISCOVERY", "found name=" + runCatching { device.name }.getOrNull().orEmpty().take(32) + " address=**" + device.address.takeLast(5))
             if (shouldInitiate(device.address)) {
                 rfcomm.connect(device.address, MeshProtocol.RFCOMM_SERVICE_UUID)
@@ -89,23 +112,35 @@ class MeshBluetoothNode(
         registerReceiver()
         rfcomm.start()
         onDiagnostic("BT", "started transport=RFCOMM")
-        startDiscovery()
-        handler.postDelayed(discoveryLoop, DISCOVERY_INTERVAL_MS)
+        scheduleDiscovery(0L)
     }
 
     private val discoveryLoop = object : Runnable {
         override fun run() {
+            discoveryScheduled = false
             if (!running) return
             startDiscovery()
-            handler.postDelayed(this, DISCOVERY_INTERVAL_MS)
         }
+    }
+
+    private fun scheduleDiscovery(delayMs: Long) {
+        if (!running || discoveryScheduled) return
+        discoveryScheduled = true
+        handler.postDelayed(discoveryLoop, delayMs)
     }
 
     @SuppressLint("MissingPermission")
     private fun registerReceiver() {
         if (receiverRegistered) return
         ContextCompat.registerReceiver(
-            context, receiver, IntentFilter().apply { addAction(BluetoothDevice.ACTION_FOUND); addAction(BluetoothDevice.ACTION_ACL_CONNECTED) },
+            context,
+            receiver,
+            IntentFilter().apply {
+                addAction(BluetoothDevice.ACTION_FOUND)
+                addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
+                addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED)
+                addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+            },
             ContextCompat.RECEIVER_EXPORTED
         )
         receiverRegistered = true
@@ -113,11 +148,21 @@ class MeshBluetoothNode(
 
     @SuppressLint("MissingPermission")
     private fun startDiscovery() {
-        if (!running || !adapter.isEnabled) return
-        runCatching { adapter.cancelDiscovery() }
+        if (!running || !adapter.isEnabled || discoveryInProgress) return
         val started = runCatching { adapter.startDiscovery() }.getOrDefault(false)
-        onDiagnostic("BT_DISCOVERY", "start=" + started)
+        if (!started) {
+            discoveryDelayMs = (discoveryDelayMs * 2).coerceAtMost(MAX_DISCOVERY_DELAY_MS)
+            onDiagnostic("BT_DISCOVERY", "start=false next_ms=$discoveryDelayMs")
+            scheduleDiscovery(discoveryDelayMs)
+            return
+        }
+        onDiagnostic("BT_DISCOVERY", "start=true")
     }
+
+    @SuppressLint("MissingPermission")
+    private fun isUsableClassicDevice(device: BluetoothDevice): Boolean =
+        device.type != BluetoothDevice.DEVICE_TYPE_LE &&
+            device.type != BluetoothDevice.DEVICE_TYPE_UNKNOWN
 
     @SuppressLint("MissingPermission")
     private fun shouldInitiate(address: String): Boolean {
@@ -153,6 +198,7 @@ class MeshBluetoothNode(
         peerNodeIds[address] = peerId
         readyPeers.add(address)
         rfcomm.markReady(address)
+        discoveryDelayMs = INITIAL_DISCOVERY_DELAY_MS
         onDiagnostic("BT_READY", "peer=\${peerId.take(12)} address=**\${address.takeLast(5)}")
         onPeer(peerId, parts[2].trim().ifBlank { peerId.take(8) }, key)
         onPeerCountChanged(peerCount())
@@ -224,6 +270,8 @@ class MeshBluetoothNode(
         if (!running) return
         running = false
         handler.removeCallbacks(discoveryLoop)
+        discoveryScheduled = false
+        discoveryInProgress = false
         runCatching { adapter.cancelDiscovery() }
         rfcomm.stop()
         if (receiverRegistered) runCatching { context.unregisterReceiver(receiver) }
