@@ -37,6 +37,8 @@ class MeshBluetoothNode(
     companion object {
         private const val HELLO_MAGIC = "MESH_HELLO_V1"
         private const val DISCOVERY_INTERVAL_MS = 20_000L
+        private const val INITIAL_DISCOVERY_DELAY_MS = 10_000L
+        private const val MAX_DISCOVERY_DELAY_MS = 120_000L
         private const val DISCOVERY_RETRY_MS = 2_000L
         private const val RECONNECT_DELAY_MS = 3_000L
         private const val PRESENCE_INTERVAL_MS = 10_000L
@@ -52,6 +54,7 @@ class MeshBluetoothNode(
     private var receiverRegistered = false
     private var running = false
     @Volatile private var discoveryActive = false
+    private var discoveryDelayMs = INITIAL_DISCOVERY_DELAY_MS
 
     private val rfcomm = MeshRfcommTransport(
         context, adapter, MeshProtocol.RFCOMM_SERVICE_UUID,
@@ -77,6 +80,11 @@ class MeshBluetoothNode(
         override fun onReceive(context: Context?, intent: Intent?) {
             if (!running) return
             when (intent?.action) {
+                BluetoothAdapter.ACTION_DISCOVERY_STARTED -> {
+                    discoveryActive = true
+                    onDiagnostic("BT_DISCOVERY", "started")
+                }
+
                 BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
                     discoveryActive = false
                     onDiagnostic("BT_DISCOVERY", "finished")
@@ -91,12 +99,12 @@ class MeshBluetoothNode(
                         "found name=" + runCatching { device.name }.getOrNull().orEmpty().take(32) +
                             " address=**" + device.address.takeLast(5)
                     )
-                    if (shouldInitiate(device.address)) connectIfNeeded(device.address)
+                    if (isUsableClassicDevice(device) && shouldInitiate(device.address)) connectIfNeeded(device.address)
                 }
 
                 BluetoothDevice.ACTION_ACL_CONNECTED -> {
                     val device = deviceFromIntent(intent) ?: return
-                    if (device.address != adapter.address) {
+                    if (device.address != adapter.address && isUsableClassicDevice(device)) {
                         onDiagnostic("BT_DISCOVERY", "acl_connected address=**" + device.address.takeLast(5))
                     }
                 }
@@ -162,6 +170,7 @@ class MeshBluetoothNode(
             IntentFilter().apply {
                 addAction(BluetoothDevice.ACTION_FOUND)
                 addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
+                addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED)
                 addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
             },
             ContextCompat.RECEIVER_EXPORTED
@@ -194,10 +203,16 @@ class MeshBluetoothNode(
             discoveryActive = true
             onDiagnostic("BT_DISCOVERY", "start=true")
         } else {
-            onDiagnostic("BT_DISCOVERY", "start=false")
-            handler.postDelayed({ if (running) maybeStartDiscovery() }, DISCOVERY_RETRY_MS)
+            discoveryDelayMs = (discoveryDelayMs * 2).coerceAtMost(MAX_DISCOVERY_DELAY_MS)
+            onDiagnostic("BT_DISCOVERY", "start=false next_ms=$discoveryDelayMs")
+            handler.postDelayed({ if (running) maybeStartDiscovery() }, discoveryDelayMs)
         }
     }
+
+    @SuppressLint("MissingPermission")
+    @SuppressLint("MissingPermission")
+    private fun isUsableClassicDevice(device: BluetoothDevice): Boolean =
+        device.type != BluetoothDevice.DEVICE_TYPE_LE
 
     @SuppressLint("MissingPermission")
     private fun connectIfNeeded(address: String) {
@@ -248,6 +263,7 @@ class MeshBluetoothNode(
         peerNodeIds[address] = peerId
         readyPeers.add(address)
         rfcomm.markReady(address)
+        discoveryDelayMs = INITIAL_DISCOVERY_DELAY_MS
         onDiagnostic("BT_READY", "peer=@@{peerId.take(12)} address=**@@{address.takeLast(5)}")
         onPeer(peerId, parts[2].trim().ifBlank { peerId.take(8) }, key)
         onPeerCountChanged(peerCount())
@@ -323,6 +339,7 @@ class MeshBluetoothNode(
         if (!running) return
         running = false
         discoveryActive = false
+        discoveryDelayMs = INITIAL_DISCOVERY_DELAY_MS
         handler.removeCallbacks(discoveryLoop)
         handler.removeCallbacks(presenceLoop)
         runCatching { adapter.cancelDiscovery() }
