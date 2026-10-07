@@ -161,8 +161,7 @@ class MeshBluetoothNode(
 
     @SuppressLint("MissingPermission")
     private fun isUsableClassicDevice(device: BluetoothDevice): Boolean =
-        device.type != BluetoothDevice.DEVICE_TYPE_LE &&
-            device.type != BluetoothDevice.DEVICE_TYPE_UNKNOWN
+        device.type != BluetoothDevice.DEVICE_TYPE_LE
 
     @SuppressLint("MissingPermission")
     private fun shouldInitiate(address: String): Boolean {
