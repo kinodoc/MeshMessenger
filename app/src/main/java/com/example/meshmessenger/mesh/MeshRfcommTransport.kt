@@ -36,6 +36,7 @@ class MeshRfcommTransport(
         Thread(r, "MeshRfcomm").apply { isDaemon = true }
     }
     private val sockets = ConcurrentHashMap<String, BluetoothSocket>()
+    private val connecting = ConcurrentHashMap.newKeySet<String>()
     private val writers = ConcurrentHashMap<String, Any>()
     private val ready = ConcurrentHashMap.newKeySet<String>()
     private val reads = ConcurrentHashMap<String, Future<*>>()
@@ -79,7 +80,7 @@ class MeshRfcommTransport(
     fun connect(address: String, peerServiceUuid: UUID) {
         if (!running) return
         val device = runCatching { adapter.getRemoteDevice(address) }.getOrNull() ?: return
-        if (sockets.containsKey(address)) return
+        if (sockets.containsKey(address) || !connecting.add(address)) return
         io.submit {
             var socket: BluetoothSocket? = null
             try {
@@ -96,6 +97,8 @@ class MeshRfcommTransport(
             } catch (t: Throwable) {
                 runCatching { socket?.close() }
                 onDiagnostic("BT_RFCOMM", "connect_failed address=**${address.takeLast(5)} error=${t.javaClass.simpleName}:${t.message}")
+            } finally {
+                connecting.remove(address)
             }
         }
     }
@@ -111,6 +114,7 @@ class MeshRfcommTransport(
         }
         writers[address] = Any()
         onDiagnostic("BT_RFCOMM", "socket_connected direction=${direction} address=**${address.takeLast(5)}")
+        connecting.remove(address)
         onConnected(address)
         reads[address] = io.submit { readLoop(address, socket) }
         val hello = helloPayload()
@@ -198,6 +202,7 @@ class MeshRfcommTransport(
         reads.clear()
         sockets.values.forEach { runCatching { it.close() } }
         sockets.clear()
+        connecting.clear()
         ready.clear()
         writers.clear()
         runCatching { serverSocket?.close() }
