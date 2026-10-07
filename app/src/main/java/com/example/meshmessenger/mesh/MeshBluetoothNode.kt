@@ -210,7 +210,6 @@ class MeshBluetoothNode(
     }
 
     @SuppressLint("MissingPermission")
-    @SuppressLint("MissingPermission")
     private fun isUsableClassicDevice(device: BluetoothDevice): Boolean =
         device.type != BluetoothDevice.DEVICE_TYPE_LE
 
