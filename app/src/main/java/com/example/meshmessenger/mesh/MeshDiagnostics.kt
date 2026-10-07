@@ -30,6 +30,7 @@ class MeshDiagnostics(context: Context) {
     fun event(type: String, detail: String = "") {
         val safeType = type.replace(Regex("[\\r\\n|]"), " ").take(80)
         val safeDetail = sanitize(detail).take(500)
+        android.util.Log.d("MeshBluetoothDiag", "$safeType|$safeDetail")
         val line = buildString {
             append(formatter.format(Date()))
             append("|v=").append(BuildConfig.VERSION_NAME)
