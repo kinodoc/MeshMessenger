@@ -226,8 +226,8 @@ class BriarBluetoothTransport(
         connecting.clear()
         closeQuietly(serverSocket)
         serverSocket = null
-        scheduler.shutdownNow()
-        io.shutdownNow()
+        // Keep the executors alive so a foreground-service stop/start cycle can
+        // restart the transport without constructing a new MeshBluetoothNode.
         onDiagnostic("BT_BRIAR", "stopped")
     }
 

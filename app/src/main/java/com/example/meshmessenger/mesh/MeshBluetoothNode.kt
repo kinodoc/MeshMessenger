@@ -259,6 +259,13 @@ class MeshBluetoothNode(
         val peerId = parts[1].trim()
         val key = runCatching { Base64.decode(parts[3], Base64.NO_WRAP) }.getOrNull() ?: return
         if (key.isEmpty()) return
+        // The node ID is the SHA-256 key ID. Do not mark a transport ready
+        // when the peer claims an identity that does not match its public key.
+        val publicKey = runCatching { CryptoManager.publicKeyFromBase64(parts[3]) }.getOrNull() ?: return
+        if (CryptoManager.keyId(publicKey) != peerId) {
+            onDiagnostic("BT_READY", "identity_mismatch address=**${address.takeLast(5)}")
+            return
+        }
         peerNodeIds[address] = peerId
         readyPeers.add(address)
         rfcomm.markReady(address)
@@ -349,7 +356,7 @@ class MeshBluetoothNode(
         peerNodeIds.clear()
         connectingPeers.clear()
         onPeerCountChanged(0)
-        io.shutdownNow()
+        // Keep the node executor reusable across service stop/start cycles.
         onDiagnostic("BT", "stopped")
     }
 
