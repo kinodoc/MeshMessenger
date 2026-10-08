@@ -96,12 +96,15 @@ class BriarBluetoothTransport(
             return
         }
         cancelRetry(address)
-        onDiagnostic("BT_CONNECT_QUEUE", "address=**" + address.takeLast(5) + " active=1")
+        onDiagnostic("BT_CONNECT_QUEUE", "address=**" + address.takeLast(5) + " " + snapshot())
+        val startedAt = System.nanoTime()
         val task = connectIo.submit {
             var socket: BluetoothSocket? = null
             try {
                 if (!running) return@submit
-                if (runCatching { adapter.isDiscovering }.getOrDefault(false)) runCatching { adapter.cancelDiscovery() }
+                val discovering = runCatching { adapter.isDiscovering }.getOrDefault(false)
+                onDiagnostic("BT_CONNECT_STATE", "address=**" + address.takeLast(5) + " discovery=" + discovering + " " + snapshot())
+                if (discovering) runCatching { adapter.cancelDiscovery() }
                 val device = adapter.getRemoteDevice(address)
                 onDiagnostic("BT_BRIAR", "connect_start address=**" + address.takeLast(5))
                 socket = device.createInsecureRfcommSocketToServiceRecord(peerServiceUuid)
@@ -112,15 +115,15 @@ class BriarBluetoothTransport(
                 }
                 attach(socket, "outgoing")
                 retryDelay.remove(address)
-                onDiagnostic("BT_CONNECT_COMPLETE", "address=**" + address.takeLast(5) + " result=connected")
+                onDiagnostic("BT_CONNECT_COMPLETE", "address=**" + address.takeLast(5) + " result=connected elapsed_ms=" + ((System.nanoTime() - startedAt) / 1_000_000L) + " " + snapshot())
             } catch (t: Throwable) {
                 closeQuietly(socket)
-                onDiagnostic("BT_BRIAR", "connect_failed address=**" + address.takeLast(5) + " error=" + t.javaClass.simpleName)
+                onDiagnostic("BT_CONNECT_FAIL", "address=**" + address.takeLast(5) + " error=" + t.javaClass.simpleName + " elapsed_ms=" + ((System.nanoTime() - startedAt) / 1_000_000L) + " " + snapshot())
                 scheduleRetry(address, peerServiceUuid)
             } finally {
                 connecting.remove(address)
                 connectTasks.remove(address)
-                onDiagnostic("BT_CONNECT_COMPLETE", "address=**" + address.takeLast(5) + " result=finished")
+                onDiagnostic("BT_CONNECT_COMPLETE", "address=**" + address.takeLast(5) + " result=finished elapsed_ms=" + ((System.nanoTime() - startedAt) / 1_000_000L) + " " + snapshot())
             }
         }
         connectTasks[address] = task
@@ -134,7 +137,7 @@ class BriarBluetoothTransport(
         writers[address] = Any()
         connecting.remove(address)
         cancelRetry(address)
-        onDiagnostic("BT_BRIAR", "connected direction=" + direction + " address=**" + address.takeLast(5))
+        onDiagnostic("BT_BRIAR", "connected direction=" + direction + " address=**" + address.takeLast(5) + " " + snapshot())
         // Start the reader before notifying the node and before sending HELLO.
         // This prevents the first inbound frame from racing the connection callback.
         io.submit { readLoop(address, socket) }
@@ -224,13 +227,20 @@ class BriarBluetoothTransport(
 
     private fun cancelRetry(address: String) { retryTasks.remove(address)?.cancel(false) }
 
+    private fun snapshot(): String = "running=" + running +
+        " connecting=" + connecting.size +
+        " queued=" + connectTasks.size +
+        " sockets=" + sockets.size +
+        " ready=" + ready.size +
+        " retries=" + retryTasks.size
+
     private fun remove(address: String, socket: BluetoothSocket) {
         if (!sockets.remove(address, socket)) return
         ready.remove(address)
         writers.remove(address)
         closeQuietly(socket)
         onDisconnected(address)
-        onDiagnostic("BT_BRIAR", "disconnected address=**" + address.takeLast(5))
+        onDiagnostic("BT_BRIAR", "disconnected address=**" + address.takeLast(5) + " " + snapshot())
     }
 
     fun stop() {
