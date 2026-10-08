@@ -82,12 +82,12 @@ class MeshBluetoothNode(
             when (intent?.action) {
                 BluetoothAdapter.ACTION_DISCOVERY_STARTED -> {
                     discoveryActive = true
-                    onDiagnostic("BT_DISCOVERY", "started")
+                    onDiagnostic("BT_DISCOVERY", "started bonded=" + runCatching { adapter.bondedDevices.size }.getOrDefault(0) + " ready=" + readyPeers.size + " connecting=" + connectingPeers.size)
                 }
 
                 BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
                     discoveryActive = false
-                    onDiagnostic("BT_DISCOVERY", "finished")
+                    onDiagnostic("BT_DISCOVERY", "finished ready=" + readyPeers.size + " connecting=" + connectingPeers.size)
                     handler.postDelayed({ if (running) maybeStartDiscovery() }, DISCOVERY_RETRY_MS)
                 }
 
@@ -127,6 +127,7 @@ class MeshBluetoothNode(
 
         running = true
         discoveryActive = false
+        onDiagnostic("BT_STATE", "start enabled=true bonded=" + runCatching { adapter.bondedDevices.size }.getOrDefault(0) + " address_known=" + !adapter.address.isNullOrBlank())
         connectingPeers.clear()
         registerReceiver()
         rfcomm.start()
@@ -194,7 +195,7 @@ class MeshBluetoothNode(
     private fun maybeStartDiscovery() {
         if (!running || !adapter.isEnabled || discoveryActive) return
         if (hasReadyPeers() || connectingPeers.isNotEmpty()) {
-            onDiagnostic("BT_DISCOVERY", "deferred connected=" + hasReadyPeers() + " connecting=" + connectingPeers.size)
+            onDiagnostic("BT_DISCOVERY", "deferred ready=" + readyPeers.size + " connected=" + hasReadyPeers() + " connecting=" + connectingPeers.size + " adapter_discovering=" + runCatching { adapter.isDiscovering }.getOrDefault(false))
             return
         }
 
@@ -216,7 +217,10 @@ class MeshBluetoothNode(
     @SuppressLint("MissingPermission")
     private fun connectIfNeeded(address: String) {
         if (!running || address == adapter.address) return
-        if (readyPeers.contains(address) || connectingPeers.contains(address)) return
+        if (readyPeers.contains(address) || connectingPeers.contains(address)) {
+            onDiagnostic("BT_CONNECT_SKIP", "reason=duplicate address=**" + address.takeLast(5) + " ready=" + readyPeers.contains(address) + " connecting=" + connectingPeers.contains(address))
+            return
+        }
 
         connectingPeers.add(address)
         if (discoveryActive || runCatching { adapter.isDiscovering }.getOrDefault(false)) {
@@ -224,14 +228,16 @@ class MeshBluetoothNode(
             discoveryActive = false
             onDiagnostic("BT_DISCOVERY", "cancel_for_connect address=**" + address.takeLast(5))
         }
-        onDiagnostic("BT_RFCOMM", "connect_requested address=**" + address.takeLast(5))
+        onDiagnostic("BT_RFCOMM", "connect_requested address=**" + address.takeLast(5) + " ready=" + readyPeers.size + " connecting=" + connectingPeers.size + " discovery=" + discoveryActive)
         rfcomm.connect(address, MeshProtocol.RFCOMM_SERVICE_UUID)
     }
 
     @SuppressLint("MissingPermission")
     private fun shouldInitiate(address: String): Boolean {
         val local = runCatching { adapter.address }.getOrDefault("")
-        return local.isNotBlank() && local < address
+        val result = local.isNotBlank() && local < address
+        onDiagnostic("BT_DIRECTION", "address=**" + address.takeLast(5) + " initiate=" + result)
+        return result
     }
 
     private fun helloPayload(): ByteArray {
@@ -268,6 +274,7 @@ class MeshBluetoothNode(
         }
         peerNodeIds[address] = peerId
         readyPeers.add(address)
+        onDiagnostic("BT_PEER_STATE", "ready_count=" + readyPeers.size + " peer_count=" + peerCount())
         rfcomm.markReady(address)
         discoveryDelayMs = INITIAL_DISCOVERY_DELAY_MS
         onDiagnostic("BT_READY", "peer=${peerId.take(12)} address=**${address.takeLast(5)}")
@@ -354,6 +361,7 @@ class MeshBluetoothNode(
         receiverRegistered = false
         readyPeers.clear()
         peerNodeIds.clear()
+        onDiagnostic("BT_STATE", "stopped")
         connectingPeers.clear()
         onPeerCountChanged(0)
         // Keep the node executor reusable across service stop/start cycles.
