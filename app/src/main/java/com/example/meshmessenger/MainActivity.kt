@@ -671,59 +671,48 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(24, 4, 24, 4)
         }
-
-        val name = EditText(this).apply {
-            hint = "Имя контакта"
-        }
-
+        val name = EditText(this).apply { hint = "Имя контакта (необязательно)" }
         val card = EditText(this).apply {
-            hint = "Вставь данные QR-карточки"
+            hint = "Вставь код контактной карточки"
             minLines = 4
+            setTextIsSelectable(true)
         }
-
         pendingQrField = card
-
         val scan = Button(this).apply {
             text = "▣ СКАНИРОВАТЬ QR КАМЕРОЙ"
             setOnClickListener {
-                if (androidx.core.content.ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                    launchQrScanner()
-                } else {
-                    cameraPermission.launch(Manifest.permission.CAMERA)
-                }
+                if (androidx.core.content.ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchQrScanner()
+                else cameraPermission.launch(Manifest.permission.CAMERA)
             }
         }
-
-        box.addView(name)
-        box.addView(card)
-        box.addView(scan)
-
+        box.addView(name); box.addView(card); box.addView(scan)
         AlertDialogBuilder(box, "Добавить контакт") { }
     }
 
     private fun launchQrScanner() {
-        qrScanner.launch(
-            ScanOptions().apply {
-                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                setPrompt("Наведите камеру на QR-код контакта")
-                setBeepEnabled(true)
-                setOrientationLocked(true)
-            }
-        )
+        qrScanner.launch(ScanOptions().apply {
+            setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+            setPrompt("Наведите камеру на QR-код контакта")
+            setBeepEnabled(true)
+            setOrientationLocked(true)
+        })
     }
 
     private fun AlertDialogBuilder(view: LinearLayout, title: String, ignored: () -> Unit) {
         android.app.AlertDialog.Builder(this).setTitle(title).setView(view)
             .setPositiveButton("Добавить") { _, _ ->
                 val fields = view.children().toList().filterIsInstance<EditText>()
-                val name = fields[0].text.toString().ifBlank { "Контакт" }
+                val manualName = fields[0].text.toString().trim()
                 val raw = fields[1].text.toString().trim()
-                val parts = raw.split("|", limit = 4)
-                val publicKey = parts.getOrNull(2).orEmpty()
-                if (parts.size >= 3 && parts[0].isNotBlank() && publicKey.isNotBlank() && runCatching { CryptoManager.publicKeyFromBase64(publicKey) }.isSuccess) {
-                    contacts.upsert(ContactStore.Contact(parts[0], name, publicKey))
-                    log.text = "Контакт добавлен: $name • поиск через BT и Relay"
-                } else log.text = "Неверная QR-карточка. Формат: NodeID|имя|publicKey"
+                runCatching {
+                    val parsed = ContactCard.parse(raw)
+                    val finalName = manualName.ifBlank { parsed.displayName }
+                    require(parsed.nodeId != identity.nodeId) { "Нельзя добавить самого себя" }
+                    contacts.upsert(ContactStore.Contact(parsed.nodeId, finalName.take(64), parsed.publicKeyBase64))
+                    log.text = if (parsed.isLegacy) "Контакт добавлен и проверен по ключу: $finalName" else "Контакт добавлен: $finalName • ID и ключ совпадают"
+                }.onFailure { error ->
+                    log.text = "Контакт НЕ добавлен: " + (error.message ?: "неверная карточка")
+                }
             }.setNegativeButton("Отмена", null).show()
     }
 
@@ -1261,7 +1250,7 @@ class MainActivity : ComponentActivity() {
 
 
     private fun showOwnQr() {
-        val card = "${identity.nodeId}|${identity.displayName}|${identity.publicKeyBase64}"
+        val card = ContactCard.create(identity.nodeId, identity.displayName, identity.publicKeyBase64)
         val image = makeQr(card, 720)
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1270,15 +1259,16 @@ class MainActivity : ComponentActivity() {
         box.addView(ImageView(this).apply {
             setImageBitmap(image)
             adjustViewBounds = true
+            contentDescription = "QR-код контактной карточки"
         })
         box.addView(TextView(this).apply {
-            text = "Нажми на ключ ниже, чтобы скопировать его и передать в другое приложение:" + System.lineSeparator() + card
+            text = "КОНТАКТНЫЙ КОД\nНажми, чтобы скопировать:" + System.lineSeparator() + card
             setTextIsSelectable(true)
             setPadding(0, 16, 0, 8)
             setOnClickListener {
                 val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("Mesh Messenger", card))
-                Toast.makeText(this@MainActivity, "Ключ скопирован", Toast.LENGTH_SHORT).show()
+                clipboard.setPrimaryClip(ClipData.newPlainText("Mesh Messenger contact", card))
+                Toast.makeText(this@MainActivity, "Контактный код скопирован", Toast.LENGTH_SHORT).show()
             }
         })
         android.app.AlertDialog.Builder(this)
