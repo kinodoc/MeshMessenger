@@ -56,7 +56,7 @@ class MeshBluetoothNode(
     @Volatile private var discoveryActive = false
     private var discoveryDelayMs = INITIAL_DISCOVERY_DELAY_MS
 
-    private val rfcomm = MeshRfcommTransport(
+    private val rfcomm = BriarBluetoothTransport(
         context, adapter, MeshProtocol.RFCOMM_SERVICE_UUID,
         { helloPayload() }, onDiagnostic,
         { address, bytes -> handleFrame(address, bytes) },
