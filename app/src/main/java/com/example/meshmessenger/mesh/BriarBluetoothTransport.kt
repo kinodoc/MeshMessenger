@@ -92,8 +92,10 @@ class BriarBluetoothTransport(
     @SuppressLint("MissingPermission")
     fun connect(address: String, peerServiceUuid: UUID) {
         if (!running || address.isBlank()) return
-        if (sockets.containsKey(address) || !connecting.add(address)) {
-            if (sockets.containsKey(address)) onDiagnostic("BT_CONNECT_SKIP", "already_connected address=**" + address.takeLast(5))
+        if (sockets.containsKey(address) || ready.contains(address) || !connecting.add(address)) {
+            if (sockets.containsKey(address) || ready.contains(address)) {
+                onDiagnostic("BT_CONNECT_SKIP", "already_connected address=**" + address.takeLast(5) + " " + snapshot())
+            }
             return
         }
         cancelRetry(address)
@@ -109,8 +111,22 @@ class BriarBluetoothTransport(
                 if (discovering) runCatching { adapter.cancelDiscovery() }
                 val device = adapter.getRemoteDevice(address)
                 onDiagnostic("BT_BRIAR", "connect_start address=**" + address.takeLast(5))
+                // An incoming connection may have completed while this outgoing
+                // attempt was being prepared. Never create a second socket for
+                // the same peer once one is already present.
+                if (sockets.containsKey(address) || ready.contains(address)) {
+                    onDiagnostic("BT_CONNECT_SKIP", "socket_appeared_before_connect address=**" + address.takeLast(5) + " " + snapshot())
+                    return@submit
+                }
                 socket = device.createInsecureRfcommSocketToServiceRecord(peerServiceUuid)
                 socket.connect()
+                if (sockets.containsKey(address) || ready.contains(address)) {
+                    onDiagnostic("BT_CONNECT_SKIP", "socket_appeared_during_connect address=**" + address.takeLast(5) + " " + snapshot())
+                    closeQuietly(socket)
+                    socket = null
+                    connected = true
+                    return@submit
+                }
                 if (!running) {
                     closeQuietly(socket)
                     return@submit
@@ -137,7 +153,15 @@ class BriarBluetoothTransport(
     private fun attach(socket: BluetoothSocket, direction: String) {
         val address = runCatching { socket.remoteDevice.address }.getOrDefault("unknown")
         val old = sockets.putIfAbsent(address, socket)
-        if (old != null) { closeQuietly(socket); onDiagnostic("BT_BRIAR", "duplicate_connection address=**" + address.takeLast(5)); return }
+        if (old != null) {
+            closeQuietly(socket)
+            onDiagnostic("BT_BRIAR", "duplicate_connection address=**" + address.takeLast(5))
+            return
+        }
+        // If the peer connected inbound while an outbound connect() was
+        // blocking, cancel that redundant attempt immediately. The established
+        // socket remains the single connection for this peer.
+        connectTasks[address]?.cancel(true)
         writers[address] = Any()
         connecting.remove(address)
         cancelRetry(address)
