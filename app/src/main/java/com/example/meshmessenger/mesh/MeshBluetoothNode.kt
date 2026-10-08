@@ -55,6 +55,8 @@ class MeshBluetoothNode(
     private var running = false
     @Volatile private var discoveryActive = false
     private var discoveryDelayMs = INITIAL_DISCOVERY_DELAY_MS
+    // Only one RFCOMM connection attempt may be in flight at a time. Established peer connections are not limited.
+    private var activeConnectAddress: String? = null
 
     private val rfcomm = BriarBluetoothTransport(
         context, adapter, MeshProtocol.RFCOMM_SERVICE_UUID,
@@ -62,10 +64,12 @@ class MeshBluetoothNode(
         { address, bytes -> handleFrame(address, bytes) },
         { address ->
             connectingPeers.remove(address)
+            if (activeConnectAddress == address) activeConnectAddress = null
             onDiagnostic("BT_RFCOMM", "connected address=**${address.takeLast(5)}")
         },
         { address ->
             connectingPeers.remove(address)
+            if (activeConnectAddress == address) activeConnectAddress = null
             readyPeers.remove(address)
             peerNodeIds.remove(address)
             onPeerCountChanged(peerCount())
@@ -138,6 +142,7 @@ class MeshBluetoothNode(
         discoveryActive = false
         onDiagnostic("BT_STATE", "start enabled=true bonded=" + runCatching { adapter.bondedDevices.size }.getOrDefault(0) + " address_known=" + !adapter.address.isNullOrBlank())
         connectingPeers.clear()
+        activeConnectAddress = null
         registerReceiver()
         rfcomm.start()
         onDiagnostic("BT", "started transport=RFCOMM")
@@ -233,6 +238,11 @@ class MeshBluetoothNode(
             return
         }
 
+        if (activeConnectAddress != null) {
+            onDiagnostic("BT_CONNECT_SKIP", "reason=active_attempt address=**${address.takeLast(5)} active=**${activeConnectAddress!!.takeLast(5)}")
+            return
+        }
+        activeConnectAddress = address
         connectingPeers.add(address)
         if (discoveryActive || runCatching { adapter.isDiscovering }.getOrDefault(false)) {
             runCatching { adapter.cancelDiscovery() }
@@ -374,6 +384,7 @@ class MeshBluetoothNode(
         peerNodeIds.clear()
         onDiagnostic("BT_STATE", "stopped")
         connectingPeers.clear()
+        activeConnectAddress = null
         onPeerCountChanged(0)
         // Keep the node executor reusable across service stop/start cycles.
         onDiagnostic("BT", "stopped")
