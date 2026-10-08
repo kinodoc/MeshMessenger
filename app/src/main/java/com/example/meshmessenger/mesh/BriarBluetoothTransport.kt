@@ -124,6 +124,7 @@ class BriarBluetoothTransport(
             }
         }
         connectTasks[address] = task
+    }
 
     @SuppressLint("MissingPermission")
     private fun attach(socket: BluetoothSocket, direction: String) {
