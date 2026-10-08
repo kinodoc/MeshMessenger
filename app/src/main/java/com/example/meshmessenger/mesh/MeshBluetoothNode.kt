@@ -90,6 +90,16 @@ class MeshBluetoothNode(
                     onDiagnostic("BT_DISCOVERY", "finished ready=" + readyPeers.size + " connecting=" + connectingPeers.size)
                     handler.postDelayed({ if (running) maybeStartDiscovery() }, DISCOVERY_RETRY_MS)
                 }
+                BluetoothAdapter.ACTION_STATE_CHANGED -> {
+                    val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+                    val previous = intent.getIntExtra(BluetoothAdapter.EXTRA_PREVIOUS_STATE, BluetoothAdapter.ERROR)
+                    onDiagnostic("BT_ADAPTER", "state=" + stateName(state) + " previous=" + stateName(previous) + " ready=" + readyPeers.size + " connecting=" + connectingPeers.size)
+                }
+                BluetoothAdapter.ACTION_DISCOVERY_FINISHED_UNUSED -> {
+                    discoveryActive = false
+                    onDiagnostic("BT_DISCOVERY", "finished ready=" + readyPeers.size + " connecting=" + connectingPeers.size)
+                    handler.postDelayed({ if (running) maybeStartDiscovery() }, DISCOVERY_RETRY_MS)
+                }
 
                 BluetoothDevice.ACTION_FOUND -> {
                     val device = deviceFromIntent(intent) ?: return
@@ -100,6 +110,11 @@ class MeshBluetoothNode(
                             " address=**" + device.address.takeLast(5)
                     )
                     if (isUsableClassicDevice(device) && shouldInitiate(device.address)) connectIfNeeded(device.address)
+                }
+
+                BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
+                    val device = deviceFromIntent(intent) ?: return
+                    if (device.address != adapter.address) onDiagnostic("BT_ACL", "state=disconnected address=**" + device.address.takeLast(5))
                 }
 
                 BluetoothDevice.ACTION_ACL_CONNECTED -> {
@@ -171,6 +186,8 @@ class MeshBluetoothNode(
             IntentFilter().apply {
                 addAction(BluetoothDevice.ACTION_FOUND)
                 addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
+                addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+                addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
                 addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED)
                 addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
             },
@@ -374,6 +391,14 @@ class MeshBluetoothNode(
             if (rfcomm.readyAddresses().contains(address)) ids += peerNodeIds[address] ?: address
         }
         return ids.size
+    }
+
+    private fun stateName(state: Int): String = when (state) {
+        BluetoothAdapter.STATE_OFF -> "OFF"
+        BluetoothAdapter.STATE_TURNING_OFF -> "TURNING_OFF"
+        BluetoothAdapter.STATE_ON -> "ON"
+        BluetoothAdapter.STATE_TURNING_ON -> "TURNING_ON"
+        else -> "UNKNOWN(" + state + ")"
     }
 
     @Suppress("DEPRECATION")
