@@ -118,10 +118,14 @@ class BriarBluetoothTransport(
         connecting.remove(address)
         cancelRetry(address)
         onDiagnostic("BT_BRIAR", "connected direction=" + direction + " address=**" + address.takeLast(5))
-        onConnected(address)
+        // Start the reader before notifying the node and before sending HELLO.
+        // This prevents the first inbound frame from racing the connection callback.
         io.submit { readLoop(address, socket) }
+        onConnected(address)
         val hello = helloPayload()
-        if (send(address, hello)) onDiagnostic("BT_BRIAR", "hello_tx address=**" + address.takeLast(5) + " bytes=" + hello.size)
+        if (send(address, hello)) {
+            onDiagnostic("BT_HELLO_TX", "initial address=**" + address.takeLast(5) + " bytes=" + hello.size)
+        }
     }
 
     private fun readLoop(address: String, socket: BluetoothSocket) {
