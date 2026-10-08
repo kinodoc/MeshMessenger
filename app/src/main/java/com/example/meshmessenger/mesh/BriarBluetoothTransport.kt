@@ -46,6 +46,9 @@ class BriarBluetoothTransport(
     }
 
     private val io = Executors.newCachedThreadPool { r -> Thread(r, "BriarBtTransport").apply { isDaemon = true } }
+    // BluetoothSocket.connect() is a blocking platform call. Keep it on a dedicated
+    // single-thread executor so discovery/retry can never create a connection storm.
+    private val connectIo = Executors.newSingleThreadExecutor { r -> Thread(r, "BriarBtConnect").apply { isDaemon = true } }
     private val scheduler = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "BriarBtRetry").apply { isDaemon = true } }
     private val sockets = ConcurrentHashMap<String, BluetoothSocket>()
     private val writers = ConcurrentHashMap<String, Any>()
@@ -53,6 +56,7 @@ class BriarBluetoothTransport(
     private val connecting = ConcurrentHashMap.newKeySet<String>()
     private val retryDelay = ConcurrentHashMap<String, Long>()
     private val retryTasks = ConcurrentHashMap<String, ScheduledFuture<*>>()
+    private val connectTasks = ConcurrentHashMap<String, java.util.concurrent.Future<*>>()
     private var serverSocket: BluetoothServerSocket? = null
     private var acceptTask: java.util.concurrent.Future<*>? = null
     @Volatile private var running = false
@@ -87,27 +91,39 @@ class BriarBluetoothTransport(
     @SuppressLint("MissingPermission")
     fun connect(address: String, peerServiceUuid: UUID) {
         if (!running || address.isBlank()) return
-        if (sockets.containsKey(address) || !connecting.add(address)) return
+        if (sockets.containsKey(address) || !connecting.add(address)) {
+            if (sockets.containsKey(address)) onDiagnostic("BT_CONNECT_SKIP", "already_connected address=**" + address.takeLast(5))
+            return
+        }
         cancelRetry(address)
-        io.submit {
+        onDiagnostic("BT_CONNECT_QUEUE", "address=**" + address.takeLast(5) + " active=1")
+        val task = connectIo.submit {
             var socket: BluetoothSocket? = null
             try {
+                if (!running) return@submit
                 if (runCatching { adapter.isDiscovering }.getOrDefault(false)) runCatching { adapter.cancelDiscovery() }
                 val device = adapter.getRemoteDevice(address)
                 onDiagnostic("BT_BRIAR", "connect_start address=**" + address.takeLast(5))
                 socket = device.createInsecureRfcommSocketToServiceRecord(peerServiceUuid)
                 socket.connect()
+                if (!running) {
+                    closeQuietly(socket)
+                    return@submit
+                }
                 attach(socket, "outgoing")
                 retryDelay.remove(address)
+                onDiagnostic("BT_CONNECT_COMPLETE", "address=**" + address.takeLast(5) + " result=connected")
             } catch (t: Throwable) {
                 closeQuietly(socket)
                 onDiagnostic("BT_BRIAR", "connect_failed address=**" + address.takeLast(5) + " error=" + t.javaClass.simpleName)
                 scheduleRetry(address, peerServiceUuid)
             } finally {
                 connecting.remove(address)
+                connectTasks.remove(address)
+                onDiagnostic("BT_CONNECT_COMPLETE", "address=**" + address.takeLast(5) + " result=finished")
             }
         }
-    }
+        connectTasks[address] = task
 
     @SuppressLint("MissingPermission")
     private fun attach(socket: BluetoothSocket, direction: String) {
@@ -220,6 +236,8 @@ class BriarBluetoothTransport(
         running = false
         retryTasks.values.forEach { it.cancel(false) }
         retryTasks.clear()
+        connectTasks.values.forEach { it.cancel(true) }
+        connectTasks.clear()
         retryDelay.clear()
         acceptTask?.cancel(true)
         acceptTask = null
