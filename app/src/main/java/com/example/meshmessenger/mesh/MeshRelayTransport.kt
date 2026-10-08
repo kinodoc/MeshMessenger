@@ -49,6 +49,8 @@ class MeshRelayTransport(
     @Volatile private var writer: BufferedWriter? = null
     @Volatile private var reader: BufferedReader? = null
     @Volatile private var lastPingAt = 0L
+    @Volatile private var connectionStartedAt = 0L
+    @Volatile private var connectionAttempt = 0
     private data class RetryState(val attempt: Int, val lastAttemptAt: Long)
     private val retryStates = ConcurrentHashMap<String, RetryState>()
     @Volatile private var lastAcceptedDiagnosticAt = 0L
@@ -92,7 +94,7 @@ class MeshRelayTransport(
             onDiagnostic("RELAY_SEND_SKIPPED", "reason=not_running")
             return false
         }
-        onDiagnostic("RELAY_SEND", "packet_bytes=${packet.encode().size}")
+        onDiagnostic("RELAY_SEND", "packet_bytes=${packet.encode().size} peers=" + peers.size + " socket=" + (socket != null) + " writer=" + (writer != null))
         return sendJson(JSONObject()
             .put("type", "packet")
             .put("to", packet.destinationId)
@@ -120,6 +122,7 @@ class MeshRelayTransport(
             val delay = (5_000L * (1L shl state.attempt.coerceAtMost(6))).coerceAtMost(300_000L)
             if (now - state.lastAttemptAt < delay) return@forEach
             val packet = MeshPacket.decode(entry.bytes) ?: return@forEach
+            onDiagnostic("RELAY_RETRY", "attempt=" + (state.attempt + 1) + " queued=" + entries.size)
             if (send(packet)) retryStates[id] = RetryState(state.attempt + 1, now)
             else retryStates[id] = RetryState(state.attempt + 1, now)
         }
@@ -129,12 +132,14 @@ class MeshRelayTransport(
         var delay = 1500L
         while (running.get()) {
             try {
-                onDiagnostic("RELAY_CONNECT", "state=attempt")
+                connectionAttempt++
+                connectionStartedAt = System.currentTimeMillis()
+                onDiagnostic("RELAY_CONNECT", "state=attempt attempt=" + connectionAttempt)
                 val s = sslContext.socketFactory.createSocket() as SSLSocket
                 s.connect(InetSocketAddress(HOST, PORT), 8000)
                 s.soTimeout = 0
                 s.startHandshake()
-                onDiagnostic("RELAY_CONNECT", "state=connected tls=ok")
+                onDiagnostic("RELAY_CONNECT", "state=connected tls=ok attempt=" + connectionAttempt + " elapsed_ms=" + (System.currentTimeMillis() - connectionStartedAt))
                 socket = s
                 writer = BufferedWriter(OutputStreamWriter(s.outputStream, Charsets.UTF_8))
                 reader = BufferedReader(InputStreamReader(s.inputStream, Charsets.UTF_8))
@@ -152,11 +157,11 @@ class MeshRelayTransport(
             } catch (e: Exception) {
                 if (running.get()) {
                     Log.w(TAG, "connection lost: ${e.javaClass.simpleName}")
-                    onDiagnostic("RELAY_ERROR", "stage=connection type=${e.javaClass.simpleName}")
+                    onDiagnostic("RELAY_ERROR", "stage=connection type=${e.javaClass.simpleName} attempt=" + connectionAttempt + " elapsed_ms=" + (System.currentTimeMillis() - connectionStartedAt))
                     onStatus("Relay: ожидание соединения")
                 }
             } finally {
-                onDiagnostic("RELAY_CONNECT", "state=disconnected")
+                onDiagnostic("RELAY_CONNECT", "state=disconnected peers=" + peers.size + " socket=" + (socket != null) + " attempt=" + connectionAttempt)
                 runCatching { socket?.close() }
                 socket = null
                 writer = null
