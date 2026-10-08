@@ -95,12 +95,6 @@ class MeshBluetoothNode(
                     val previous = intent.getIntExtra(BluetoothAdapter.EXTRA_PREVIOUS_STATE, BluetoothAdapter.ERROR)
                     onDiagnostic("BT_ADAPTER", "state=" + stateName(state) + " previous=" + stateName(previous) + " ready=" + readyPeers.size + " connecting=" + connectingPeers.size)
                 }
-                BluetoothAdapter.ACTION_DISCOVERY_FINISHED_UNUSED -> {
-                    discoveryActive = false
-                    onDiagnostic("BT_DISCOVERY", "finished ready=" + readyPeers.size + " connecting=" + connectingPeers.size)
-                    handler.postDelayed({ if (running) maybeStartDiscovery() }, DISCOVERY_RETRY_MS)
-                }
-
                 BluetoothDevice.ACTION_FOUND -> {
                     val device = deviceFromIntent(intent) ?: return
                     if (device.address == adapter.address) return
