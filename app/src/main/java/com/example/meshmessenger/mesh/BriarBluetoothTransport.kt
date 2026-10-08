@@ -36,7 +36,8 @@ class BriarBluetoothTransport(
     private val onDiagnostic: (String, String) -> Unit,
     private val onFrame: (String, ByteArray) -> Unit,
     private val onConnected: (String) -> Unit,
-    private val onDisconnected: (String) -> Unit
+    private val onDisconnected: (String) -> Unit,
+    private val onConnectFinished: (String, Boolean) -> Unit = { _, _ -> }
 ) {
     companion object {
         private const val SERVICE_NAME = "RFCOMM"
@@ -100,6 +101,7 @@ class BriarBluetoothTransport(
         val startedAt = System.nanoTime()
         val task = connectIo.submit {
             var socket: BluetoothSocket? = null
+            var connected = false
             try {
                 if (!running) return@submit
                 val discovering = runCatching { adapter.isDiscovering }.getOrDefault(false)
@@ -114,6 +116,7 @@ class BriarBluetoothTransport(
                     return@submit
                 }
                 attach(socket, "outgoing")
+                connected = true
                 retryDelay.remove(address)
                 onDiagnostic("BT_CONNECT_COMPLETE", "address=**" + address.takeLast(5) + " result=connected elapsed_ms=" + ((System.nanoTime() - startedAt) / 1_000_000L) + " " + snapshot())
             } catch (t: Throwable) {
@@ -121,6 +124,7 @@ class BriarBluetoothTransport(
                 onDiagnostic("BT_CONNECT_FAIL", "address=**" + address.takeLast(5) + " error=" + t.javaClass.simpleName + " elapsed_ms=" + ((System.nanoTime() - startedAt) / 1_000_000L) + " " + snapshot())
                 scheduleRetry(address, peerServiceUuid)
             } finally {
+                onConnectFinished(address, connected)
                 connecting.remove(address)
                 connectTasks.remove(address)
                 onDiagnostic("BT_CONNECT_COMPLETE", "address=**" + address.takeLast(5) + " result=finished elapsed_ms=" + ((System.nanoTime() - startedAt) / 1_000_000L) + " " + snapshot())
