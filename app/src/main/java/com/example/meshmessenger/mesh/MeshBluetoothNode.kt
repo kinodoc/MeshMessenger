@@ -76,6 +76,14 @@ class MeshBluetoothNode(
             if (running) {
                 handler.postDelayed({ if (running) maybeStartDiscovery() }, RECONNECT_DELAY_MS)
             }
+        }        ,
+        { address, connected ->
+            if (!connected && activeConnectAddress == address) {
+                activeConnectAddress = null
+                connectingPeers.remove(address)
+                onDiagnostic("BT_CONNECT_STATE", "finished_failed address=**${address.takeLast(5)} active=false")
+                if (running) handler.post { connectBondedPeers() }
+            }
         }
     )
 
