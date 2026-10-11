@@ -74,12 +74,17 @@ class MeshBluetoothNode(
         { helloPayload() }, onDiagnostic,
         { address, bytes -> handleFrame(address, bytes) },
         { address ->
+            // Mark the peer synchronously so the main-thread queue cannot start
+            // another outbound attempt in the small window before this callback
+            // is processed by the handler.
+            connectingPeers.add(address)
             onDiagnostic("BT_RFCOMM", "connected address=**" + address.takeLast(5))
             handler.post {
-                if (!running) return@post
                 cancelConnectTimeout(address)
-                if (readyPeers.contains(address) || !rfcomm.isConnected(address)) return@post
-                connectingPeers.add(address)
+                if (!running || readyPeers.contains(address) || !rfcomm.isConnected(address)) {
+                    connectingPeers.remove(address)
+                    return@post
+                }
                 candidateQueue.remove(address)
                 if (activeConnectAddress == null) activeConnectAddress = address
                 scheduleHandshakeTimeout(address)
