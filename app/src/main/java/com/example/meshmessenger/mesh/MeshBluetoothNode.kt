@@ -56,7 +56,7 @@ class MeshBluetoothNode(
     @Volatile private var discoveryActive = false
     private var discoveryDelayMs = INITIAL_DISCOVERY_DELAY_MS
     // Only one RFCOMM connection attempt may be in flight at a time. Established peer connections are not limited.
-    private var activeConnectAddress: String? = null
+    @Volatile private var activeConnectAddress: String? = null
 
     private val rfcomm = BriarBluetoothTransport(
         context, adapter, MeshProtocol.RFCOMM_SERVICE_UUID,
@@ -84,7 +84,8 @@ class MeshBluetoothNode(
                 onDiagnostic("BT_CONNECT_STATE", "finished_failed address=**${address.takeLast(5)} active=false")
                 if (running) handler.post { maybeStartDiscovery() }
             }
-        }
+        },
+        { activeConnectAddress }
     )
 
     private val receiver = object : BroadcastReceiver() {
@@ -115,7 +116,7 @@ class MeshBluetoothNode(
                         "found name=" + runCatching { device.name }.getOrNull().orEmpty().take(32) +
                             " address=**" + device.address.takeLast(5)
                     )
-                    if (isUsableClassicDevice(device) && shouldInitiate(device.address)) connectIfNeeded(device.address)
+                    if (isUsableClassicDevice(device) && shouldInitiate(device.address)) connectIfNeeded(device.address, "discovery_found")
                 }
 
                 BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
@@ -207,7 +208,7 @@ class MeshBluetoothNode(
     private fun connectBondedPeers() {
         for (device in runCatching { adapter.bondedDevices }.getOrDefault(emptySet())) {
             if (device.address != adapter.address && shouldInitiate(device.address)) {
-                connectIfNeeded(device.address)
+                connectIfNeeded(device.address, "startup_bonded")
             }
         }
     }
@@ -239,7 +240,7 @@ class MeshBluetoothNode(
         device.type != BluetoothDevice.DEVICE_TYPE_LE
 
     @SuppressLint("MissingPermission")
-    private fun connectIfNeeded(address: String) {
+    private fun connectIfNeeded(address: String, reason: String) {
         if (!running || address == adapter.address) return
         if (readyPeers.contains(address) || connectingPeers.contains(address)) {
             onDiagnostic("BT_CONNECT_SKIP", "reason=duplicate address=**" + address.takeLast(5) + " ready=" + readyPeers.contains(address) + " connecting=" + connectingPeers.contains(address))
@@ -257,8 +258,8 @@ class MeshBluetoothNode(
             discoveryActive = false
             onDiagnostic("BT_DISCOVERY", "cancel_for_connect address=**" + address.takeLast(5))
         }
-        onDiagnostic("BT_RFCOMM", "connect_requested address=**" + address.takeLast(5) + " ready=" + readyPeers.size + " connecting=" + connectingPeers.size + " discovery=" + discoveryActive)
-        rfcomm.connect(address, MeshProtocol.RFCOMM_SERVICE_UUID)
+        onDiagnostic("BT_RFCOMM", "connect_requested address=**" + address.takeLast(5) + " reason=" + reason + " ready=" + readyPeers.size + " connecting=" + connectingPeers.size + " active=**" + address.takeLast(5) + " discovery=" + discoveryActive)
+        rfcomm.connect(address, MeshProtocol.RFCOMM_SERVICE_UUID, reason)
     }
 
     @SuppressLint("MissingPermission")
