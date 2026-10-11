@@ -69,7 +69,10 @@ class MeshBluetoothNode(
     @Volatile private var activeConnectAddress: String? = null
     private val connectQueueRunnable = Runnable { pumpConnectQueue() }
 
-    private val rfcomm: MeshClassicBluetoothTransport = MeshClassicBluetoothTransport(
+    private lateinit var rfcomm: MeshClassicBluetoothTransport
+
+    init {
+        rfcomm = MeshClassicBluetoothTransport(
         context, adapter, MeshProtocol.RFCOMM_SERVICE_UUID,
         { helloPayload() }, onDiagnostic,
         { address, bytes -> handleFrame(address, bytes) },
@@ -134,7 +137,8 @@ class MeshBluetoothNode(
                 }
             }
         }
-    )
+        )
+    }
 
     private val receiver = object : BroadcastReceiver() {
         @SuppressLint("MissingPermission")
