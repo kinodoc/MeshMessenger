@@ -258,7 +258,13 @@ class MeshBluetoothNode(
             onDiagnostic("BT_DISCOVERY", "cancel_for_connect address=**" + address.takeLast(5))
         }
         onDiagnostic("BT_RFCOMM", "connect_requested address=**" + address.takeLast(5) + " ready=" + readyPeers.size + " connecting=" + connectingPeers.size + " discovery=" + discoveryActive)
-        rfcomm.connect(address, MeshProtocol.RFCOMM_SERVICE_UUID)
+        val accepted = rfcomm.connect(address, MeshProtocol.RFCOMM_SERVICE_UUID)
+        if (!accepted) {
+            if (activeConnectAddress == address) activeConnectAddress = null
+            connectingPeers.remove(address)
+            onDiagnostic("BT_CONNECT_SKIP", "transport_rejected address=**" + address.takeLast(5) + " ready=" + rfcomm.readyAddresses().contains(address))
+            handler.post { if (running) maybeStartDiscovery() }
+        }
     }
 
     @SuppressLint("MissingPermission")
