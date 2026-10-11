@@ -58,6 +58,9 @@ class BriarBluetoothTransport(
     private val retryDelay = ConcurrentHashMap<String, Long>()
     private val retryTasks = ConcurrentHashMap<String, ScheduledFuture<*>>()
     private val connectTasks = ConcurrentHashMap<String, java.util.concurrent.Future<*>>()
+    private val connectAdmissionLock = Any()
+    // Keep the outgoing slot occupied until the blocking platform connect really returns.
+    @Volatile private var outgoingAttemptAddress: String? = null
     private var serverSocket: BluetoothServerSocket? = null
     private var acceptTask: java.util.concurrent.Future<*>? = null
     @Volatile private var running = false
@@ -92,61 +95,83 @@ class BriarBluetoothTransport(
     @SuppressLint("MissingPermission")
     fun connect(address: String, peerServiceUuid: UUID): Boolean {
         if (!running || address.isBlank()) return false
-        if (sockets.containsKey(address) || ready.contains(address) || !connecting.add(address)) {
+
+        var busyAddress: String? = null
+        val startedAt = System.nanoTime()
+        synchronized(connectAdmissionLock) {
+            if (!running) return false
             if (sockets.containsKey(address) || ready.contains(address)) {
                 onDiagnostic("BT_CONNECT_SKIP", "already_connected address=**" + address.takeLast(5) + " " + snapshot())
+                return false
             }
+            if (connecting.contains(address)) {
+                onDiagnostic("BT_CONNECT_SKIP", "already_connecting address=**" + address.takeLast(5) + " " + snapshot())
+                return false
+            }
+            val active = outgoingAttemptAddress
+            if (active != null) {
+                busyAddress = active
+            } else {
+                outgoingAttemptAddress = address
+                connecting.add(address)
+                cancelRetry(address)
+                onDiagnostic("BT_CONNECT_QUEUE", "address=**" + address.takeLast(5) + " " + snapshot())
+                val task = connectIo.submit {
+                    var socket: BluetoothSocket? = null
+                    var connected = false
+                    try {
+                        if (!running) return@submit
+                        val discovering = runCatching { adapter.isDiscovering }.getOrDefault(false)
+                        onDiagnostic("BT_CONNECT_STATE", "address=**" + address.takeLast(5) + " discovery=" + discovering + " " + snapshot())
+                        if (discovering) runCatching { adapter.cancelDiscovery() }
+                        val device = adapter.getRemoteDevice(address)
+                        onDiagnostic("BT_BRIAR", "connect_start address=**" + address.takeLast(5))
+                        if (sockets.containsKey(address) || ready.contains(address)) {
+                            onDiagnostic("BT_CONNECT_SKIP", "socket_appeared_before_connect address=**" + address.takeLast(5) + " " + snapshot())
+                            connected = true
+                            return@submit
+                        }
+                        socket = device.createInsecureRfcommSocketToServiceRecord(peerServiceUuid)
+                        socket.connect()
+                        if (sockets.containsKey(address) || ready.contains(address)) {
+                            onDiagnostic("BT_CONNECT_SKIP", "socket_appeared_during_connect address=**" + address.takeLast(5) + " " + snapshot())
+                            closeQuietly(socket)
+                            socket = null
+                            connected = true
+                            return@submit
+                        }
+                        if (!running) {
+                            closeQuietly(socket)
+                            socket = null
+                            return@submit
+                        }
+                        attach(socket, "outgoing")
+                        connected = true
+                        retryDelay.remove(address)
+                        onDiagnostic("BT_CONNECT_COMPLETE", "address=**" + address.takeLast(5) + " result=connected elapsed_ms=" + ((System.nanoTime() - startedAt) / 1_000_000L) + " " + snapshot())
+                    } catch (t: Throwable) {
+                        closeQuietly(socket)
+                        onDiagnostic("BT_CONNECT_FAIL", "address=**" + address.takeLast(5) + " error=" + t.javaClass.simpleName + " elapsed_ms=" + ((System.nanoTime() - startedAt) / 1_000_000L) + " " + snapshot())
+                        scheduleRetry(address, peerServiceUuid)
+                    } finally {
+                        onConnectFinished(address, connected)
+                        connecting.remove(address)
+                        connectTasks.remove(address)
+                        synchronized(connectAdmissionLock) {
+                            if (outgoingAttemptAddress == address) outgoingAttemptAddress = null
+                        }
+                        onDiagnostic("BT_CONNECT_COMPLETE", "address=**" + address.takeLast(5) + " result=finished elapsed_ms=" + ((System.nanoTime() - startedAt) / 1_000_000L) + " " + snapshot())
+                    }
+                }
+                connectTasks[address] = task
+            }
+        }
+
+        if (busyAddress != null) {
+            onDiagnostic("BT_CONNECT_SKIP", "reason=global_connect_busy address=**" + address.takeLast(5) + " active=**" + busyAddress!!.takeLast(5) + " " + snapshot())
+            scheduleRetry(address, peerServiceUuid)
             return false
         }
-        cancelRetry(address)
-        onDiagnostic("BT_CONNECT_QUEUE", "address=**" + address.takeLast(5) + " " + snapshot())
-        val startedAt = System.nanoTime()
-        val task = connectIo.submit {
-            var socket: BluetoothSocket? = null
-            var connected = false
-            try {
-                if (!running) return@submit
-                val discovering = runCatching { adapter.isDiscovering }.getOrDefault(false)
-                onDiagnostic("BT_CONNECT_STATE", "address=**" + address.takeLast(5) + " discovery=" + discovering + " " + snapshot())
-                if (discovering) runCatching { adapter.cancelDiscovery() }
-                val device = adapter.getRemoteDevice(address)
-                onDiagnostic("BT_BRIAR", "connect_start address=**" + address.takeLast(5))
-                // An incoming connection may have completed while this outgoing
-                // attempt was being prepared. Never create a second socket for
-                // the same peer once one is already present.
-                if (sockets.containsKey(address) || ready.contains(address)) {
-                    onDiagnostic("BT_CONNECT_SKIP", "socket_appeared_before_connect address=**" + address.takeLast(5) + " " + snapshot())
-                    return@submit
-                }
-                socket = device.createInsecureRfcommSocketToServiceRecord(peerServiceUuid)
-                socket.connect()
-                if (sockets.containsKey(address) || ready.contains(address)) {
-                    onDiagnostic("BT_CONNECT_SKIP", "socket_appeared_during_connect address=**" + address.takeLast(5) + " " + snapshot())
-                    closeQuietly(socket)
-                    socket = null
-                    connected = true
-                    return@submit
-                }
-                if (!running) {
-                    closeQuietly(socket)
-                    return@submit
-                }
-                attach(socket, "outgoing")
-                connected = true
-                retryDelay.remove(address)
-                onDiagnostic("BT_CONNECT_COMPLETE", "address=**" + address.takeLast(5) + " result=connected elapsed_ms=" + ((System.nanoTime() - startedAt) / 1_000_000L) + " " + snapshot())
-            } catch (t: Throwable) {
-                closeQuietly(socket)
-                onDiagnostic("BT_CONNECT_FAIL", "address=**" + address.takeLast(5) + " error=" + t.javaClass.simpleName + " elapsed_ms=" + ((System.nanoTime() - startedAt) / 1_000_000L) + " " + snapshot())
-                scheduleRetry(address, peerServiceUuid)
-            } finally {
-                onConnectFinished(address, connected)
-                connecting.remove(address)
-                connectTasks.remove(address)
-                onDiagnostic("BT_CONNECT_COMPLETE", "address=**" + address.takeLast(5) + " result=finished elapsed_ms=" + ((System.nanoTime() - startedAt) / 1_000_000L) + " " + snapshot())
-            }
-        }
-        connectTasks[address] = task
         return true
     }
 
@@ -155,10 +180,11 @@ class BriarBluetoothTransport(
         val address = runCatching { socket.remoteDevice.address }.getOrDefault("unknown")
         val old = sockets.putIfAbsent(address, socket)
         if (old != null) { closeQuietly(socket); onDiagnostic("BT_BRIAR", "duplicate_connection address=**" + address.takeLast(5)); return }
-        // If the peer connected inbound while an outbound connect() was
-        // blocking, cancel that redundant attempt immediately. The established
-        // socket remains the single connection for this peer.
-        connectTasks[address]?.cancel(true)
+        // Keep a blocking outgoing connect's slot until that platform call returns.
+        // Cancelling its Future can prevent finally from running and strand the gate.
+        if (direction == "incoming" && outgoingAttemptAddress == address) {
+            onDiagnostic("BT_CONNECT_SKIP", "incoming_won_outgoing_in_flight address=**" + address.takeLast(5))
+        }
         writers[address] = Any()
         connecting.remove(address)
         cancelRetry(address)
