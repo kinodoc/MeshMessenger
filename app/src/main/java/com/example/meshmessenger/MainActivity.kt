@@ -657,7 +657,12 @@ class MainActivity : ComponentActivity() {
         // The service persists incoming messages before broadcasting them. Refresh the
         // current conversation immediately; otherwise the saved message may remain
         // invisible until the user closes and reopens the chat.
-        if (selected?.nodeId == sourceId) refreshOpenChat?.invoke()
+        if (selected?.nodeId == sourceId) {
+            refreshOpenChat?.invoke()
+            // Give the chat view a second pass after SharedPreferences/IME/UI scheduling.
+            updateSelectedContactStatus()
+            window.decorView.postDelayed({ if (selected?.nodeId == sourceId) refreshOpenChat?.invoke() }, 120L)
+        }
         val contact = contacts.all().firstOrNull { it.nodeId == sourceId }
         log.text = if (contact != null) {
             "Получено от ${contact.name}: $text"
@@ -1123,6 +1128,31 @@ class MainActivity : ComponentActivity() {
             android.view.WindowManager.LayoutParams.MATCH_PARENT,
             android.view.WindowManager.LayoutParams.MATCH_PARENT
         )
+        chatDialog.window?.setSoftInputMode(
+            android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        )
+
+        // Keep the newest messages above the software keyboard.
+        val keyboardLayoutListener = android.view.ViewTreeObserver.OnGlobalLayoutListener {
+            val visible = android.graphics.Rect()
+            chatFrame.getWindowVisibleDisplayFrame(visible)
+            val rootHeight = chatFrame.rootView.height
+            val keyboardHeight = rootHeight - visible.bottom
+            if (keyboardHeight > rootHeight / 5) {
+                scroll.post { scroll.fullScroll(android.view.View.FOCUS_DOWN) }
+            }
+        }
+        chatFrame.viewTreeObserver.addOnGlobalLayoutListener(keyboardLayoutListener)
+        input.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) {
+                scroll.postDelayed({ scroll.fullScroll(android.view.View.FOCUS_DOWN) }, 120L)
+                scroll.postDelayed({ scroll.fullScroll(android.view.View.FOCUS_DOWN) }, 320L)
+            }
+        }
+        chatDialog.setOnDismissListener {
+            chatFrame.viewTreeObserver.removeOnGlobalLayoutListener(keyboardLayoutListener)
+            if (selected?.nodeId == contact.nodeId) refreshOpenChat = null
+        }
 
         refresh()
     }
