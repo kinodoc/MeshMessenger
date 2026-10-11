@@ -52,6 +52,8 @@ class BriarBluetoothTransport(
     private val connectIo = Executors.newSingleThreadExecutor { r -> Thread(r, "BriarBtConnect").apply { isDaemon = true } }
     private val scheduler = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "BriarBtRetry").apply { isDaemon = true } }
     private val sockets = ConcurrentHashMap<String, BluetoothSocket>()
+    // Keep a handle to the in-flight socket so an accepted incoming connection can abort it.
+    private val connectingSockets = ConcurrentHashMap<String, BluetoothSocket>()
     private val writers = ConcurrentHashMap<String, Any>()
     private val ready = ConcurrentHashMap.newKeySet<String>()
     private val connecting = ConcurrentHashMap.newKeySet<String>()
@@ -132,7 +134,17 @@ class BriarBluetoothTransport(
                             return@submit
                         }
                         socket = device.createInsecureRfcommSocketToServiceRecord(peerServiceUuid)
+                        connectingSockets[address] = socket
+                        if (sockets.containsKey(address) || ready.contains(address)) {
+                            connectingSockets.remove(address, socket)
+                            closeQuietly(socket)
+                            socket = null
+                            connected = true
+                            onDiagnostic("BT_CONNECT_SKIP", "socket_appeared_before_socket_connect address=**" + address.takeLast(5) + " " + snapshot())
+                            return@submit
+                        }
                         socket.connect()
+                        connectingSockets.remove(address, socket)
                         if (sockets.containsKey(address) || ready.contains(address)) {
                             onDiagnostic("BT_CONNECT_SKIP", "socket_appeared_during_connect address=**" + address.takeLast(5) + " " + snapshot())
                             closeQuietly(socket)
@@ -154,6 +166,7 @@ class BriarBluetoothTransport(
                         onDiagnostic("BT_CONNECT_FAIL", "address=**" + address.takeLast(5) + " error=" + t.javaClass.simpleName + " elapsed_ms=" + ((System.nanoTime() - startedAt) / 1_000_000L) + " " + snapshot())
                         scheduleRetry(address, peerServiceUuid)
                     } finally {
+                        socket?.let { connectingSockets.remove(address, it) }
                         onConnectFinished(address, connected)
                         connecting.remove(address)
                         connectTasks.remove(address)
@@ -184,6 +197,7 @@ class BriarBluetoothTransport(
         // Cancelling its Future can prevent finally from running and strand the gate.
         if (direction == "incoming" && outgoingAttemptAddress == address) {
             onDiagnostic("BT_CONNECT_SKIP", "incoming_won_outgoing_in_flight address=**" + address.takeLast(5))
+            connectingSockets.remove(address)?.let { closeQuietly(it) }
         }
         writers[address] = Any()
         connecting.remove(address)
@@ -305,6 +319,8 @@ class BriarBluetoothTransport(
         acceptTask = null
         sockets.values.forEach { closeQuietly(it) }
         sockets.clear()
+        connectingSockets.values.forEach { closeQuietly(it) }
+        connectingSockets.clear()
         writers.clear()
         ready.clear()
         connecting.clear()
