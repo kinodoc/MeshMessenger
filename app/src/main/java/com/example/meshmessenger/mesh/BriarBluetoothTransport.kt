@@ -95,12 +95,29 @@ class BriarBluetoothTransport(
     @SuppressLint("MissingPermission")
     fun connect(address: String, peerServiceUuid: UUID, reason: String = "coordinator") {
         if (!running || address.isBlank()) return
-        val attempt = (attemptNumbers[address] ?: 0) + 1
-        attemptNumbers[address] = attempt
-        if (sockets.containsKey(address) || !connecting.add(address)) {
-            if (sockets.containsKey(address)) onDiagnostic("BT_CONNECT_SKIP", "already_connected address=**" + address.takeLast(5))
+
+        // Retry timers live in this transport and can fire independently of the node
+        // coordinator. Never let one bypass the node's single global RFCOMM attempt.
+        val activeAddress = activeAttemptAddress()
+        if (activeAddress != null && activeAddress != address) {
+            onDiagnostic(
+                "BT_CONNECT_SKIP",
+                "reason=global_attempt_active peer=" + peerTag(address) +
+                    " active=" + peerTag(activeAddress) +
+                    " source=" + reason + " " + snapshot()
+            )
+            // A retry rejected by the global gate must not be lost. Re-schedule it
+            // with the existing bounded backoff; normal discovery requests simply wait.
+            if (reason == "retry_timer") scheduleRetry(address, peerServiceUuid)
             return
         }
+
+        if (sockets.containsKey(address) || !connecting.add(address)) {
+            if (sockets.containsKey(address)) onDiagnostic("BT_CONNECT_SKIP", "already_connected peer=" + peerTag(address))
+            return
+        }
+        val attempt = (attemptNumbers[address] ?: 0) + 1
+        attemptNumbers[address] = attempt
         cancelRetry(address)
         onDiagnostic("BT_CONNECT_QUEUE", "peer=" + peerTag(address) + " attempt=" + attempt + " reason=" + reason + " " + snapshot())
         val startedAt = System.nanoTime()
