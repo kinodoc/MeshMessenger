@@ -94,7 +94,7 @@ class MeshClassicBluetoothTransport(
             running = false
             closeQuietly(serverSocket)
             serverSocket = null
-            onDiagnostic("BT_TRANSPORT", "server_failed=\${error.javaClass.simpleName}")
+            onDiagnostic("BT_TRANSPORT", "server_failed=${error.javaClass.simpleName}")
         }
     }
 
@@ -105,7 +105,7 @@ class MeshClassicBluetoothTransport(
                 listener.accept()
             } catch (error: Exception) {
                 if (running) {
-                    onDiagnostic("BT_TRANSPORT", "accept_failed=\${error.javaClass.simpleName}")
+                    onDiagnostic("BT_TRANSPORT", "accept_failed=${error.javaClass.simpleName}")
                 }
                 break
             }
@@ -128,14 +128,14 @@ class MeshClassicBluetoothTransport(
         if (sessions.containsKey(address) || !connecting.add(address)) {
             onDiagnostic(
                 "BT_CONNECT_SKIP",
-                "reason=\${if (sessions.containsKey(address)) "socket_exists" else "attempt_exists"} address=**\${address.takeLast(5)}"
+                "reason=${if (sessions.containsKey(address)) "socket_exists" else "attempt_exists"} address=**${address.takeLast(5)}"
             )
             return
         }
 
         val startedAt = System.nanoTime()
-        lateinit var task: FutureTask<Unit>
-        task = FutureTask(Runnable {
+        val taskHolder = arrayOfNulls<FutureTask<Unit>>(1)
+        val task = FutureTask<Unit>(Runnable {
             var socket: BluetoothSocket? = null
             var registered = false
             try {
@@ -161,13 +161,13 @@ class MeshClassicBluetoothTransport(
                 if (existingPending != null) {
                     closeQuietly(created)
                     socket = null
-                    onDiagnostic("BT_CONNECT_SKIP", "reason=pending_socket_exists address=**\${address.takeLast(5)}")
+                    onDiagnostic("BT_CONNECT_SKIP", "reason=pending_socket_exists address=**${address.takeLast(5)}")
                     return@Runnable
                 }
 
                 onDiagnostic(
                     "BT_CONNECT_STATE",
-                    "address=**\${address.takeLast(5)} discovery=\${runCatching { adapter.isDiscovering }.getOrDefault(false)}"
+                    "address=**${address.takeLast(5)} discovery=${runCatching { adapter.isDiscovering }.getOrDefault(false)}"
                 )
                 created.connect()
 
@@ -191,7 +191,7 @@ class MeshClassicBluetoothTransport(
                 if (running) {
                     onDiagnostic(
                         "BT_CONNECT_FAIL",
-                        "address=**\${address.takeLast(5)} error=\${error.javaClass.simpleName} elapsed_ms=\${elapsedMs(startedAt)}"
+                        "address=**${address.takeLast(5)} error=${error.javaClass.simpleName} elapsed_ms=${elapsedMs(startedAt)}"
                     )
                 }
             } finally {
@@ -200,14 +200,15 @@ class MeshClassicBluetoothTransport(
                     closeQuietly(it)
                 }
                 connecting.remove(address)
-                connectTasks.remove(address, task)
+                taskHolder[0]?.let { connectTasks.remove(address, it) }
                 onDiagnostic(
                     "BT_CONNECT_COMPLETE",
-                    "address=**\${address.takeLast(5)} result=\${if (registered) "connected" else "finished"} elapsed_ms=\${elapsedMs(startedAt)} " + snapshot()
+                    "address=**${address.takeLast(5)} result=${if (registered) "connected" else "finished"} elapsed_ms=${elapsedMs(startedAt)} " + snapshot()
                 )
                 onConnectFinished(address, registered)
             }
         }, Unit)
+        taskHolder[0] = task
 
         if (connectTasks.putIfAbsent(address, task) != null) {
             connecting.remove(address)
@@ -216,11 +217,11 @@ class MeshClassicBluetoothTransport(
 
         try {
             connectIo.execute(task)
-            onDiagnostic("BT_CONNECT_QUEUE", "address=**\${address.takeLast(5)} " + snapshot())
+            onDiagnostic("BT_CONNECT_QUEUE", "address=**${address.takeLast(5)} " + snapshot())
         } catch (error: Exception) {
             connectTasks.remove(address, task)
             connecting.remove(address)
-            onDiagnostic("BT_CONNECT_FAIL", "address=**\${address.takeLast(5)} error=\${error.javaClass.simpleName}")
+            onDiagnostic("BT_CONNECT_FAIL", "address=**${address.takeLast(5)} error=${error.javaClass.simpleName}")
             onConnectFinished(address, false)
         }
     }
@@ -236,7 +237,7 @@ class MeshClassicBluetoothTransport(
 
         if (sessions.containsKey(address)) {
             closeQuietly(socket)
-            onDiagnostic("BT_TRANSPORT", "duplicate_socket_closed direction=\${direction.name.lowercase()} address=**\${address.takeLast(5)}")
+            onDiagnostic("BT_TRANSPORT", "duplicate_socket_closed direction=${direction.name.lowercase()} address=**${address.takeLast(5)}")
             return null
         }
 
@@ -245,7 +246,7 @@ class MeshClassicBluetoothTransport(
             // when an inbound connection for the same peer has already won.
             pendingSockets.remove(address)?.let {
                 closeQuietly(it)
-                onDiagnostic("BT_TRANSPORT", "outgoing_attempt_cancelled_by_incoming address=**\${address.takeLast(5)}")
+                onDiagnostic("BT_TRANSPORT", "outgoing_attempt_cancelled_by_incoming address=**${address.takeLast(5)}")
             }
         }
 
@@ -253,13 +254,13 @@ class MeshClassicBluetoothTransport(
         val old = sessions.putIfAbsent(address, session)
         if (old != null) {
             closeQuietly(socket)
-            onDiagnostic("BT_TRANSPORT", "duplicate_socket_race_closed address=**\${address.takeLast(5)}")
+            onDiagnostic("BT_TRANSPORT", "duplicate_socket_race_closed address=**${address.takeLast(5)}")
             return null
         }
 
         onDiagnostic(
             "BT_TRANSPORT",
-            "socket_connected direction=\${direction.name.lowercase()} address=**\${address.takeLast(5)} " + snapshot()
+            "socket_connected direction=${direction.name.lowercase()} address=**${address.takeLast(5)} " + snapshot()
         )
 
         // Start the reader before sending the first HELLO/frame.
@@ -268,7 +269,7 @@ class MeshClassicBluetoothTransport(
 
         val hello = helloPayload()
         if (sendSession(session, hello)) {
-            onDiagnostic("BT_HELLO_TX", "initial address=**\${address.takeLast(5)} bytes=\${hello.size}")
+            onDiagnostic("BT_HELLO_TX", "initial address=**${address.takeLast(5)} bytes=${hello.size}")
         }
         return session
     }
@@ -279,19 +280,19 @@ class MeshClassicBluetoothTransport(
             while (running && !session.closed && session.socket.isConnected) {
                 val length = readInt(input)
                 if (length !in 1..MAX_FRAME) {
-                    throw IllegalArgumentException("bad_frame_length=\${length}")
+                    throw IllegalArgumentException("bad_frame_length=${length}")
                 }
                 val payload = ByteArray(length)
                 readFully(input, payload)
                 if (sessions[session.address] !== session) break
-                onDiagnostic("BT_FRAME_RX", "address=**\${session.address.takeLast(5)} bytes=\${length}")
+                onDiagnostic("BT_FRAME_RX", "address=**${session.address.takeLast(5)} bytes=${length}")
                 onFrame(session.address, payload)
             }
         } catch (error: Exception) {
             if (running && !session.closed) {
                 onDiagnostic(
                     "BT_TRANSPORT",
-                    "read_end address=**\${session.address.takeLast(5)} error=\${error.javaClass.simpleName}"
+                    "read_end address=**${session.address.takeLast(5)} error=${error.javaClass.simpleName}"
                 )
             }
         } finally {
@@ -318,14 +319,14 @@ class MeshClassicBluetoothTransport(
         val session = sessions[address] ?: return false
         if (session.closed || !session.socket.isConnected) return false
         ready.add(address)
-        onDiagnostic("BT_TRANSPORT", "peer_ready=true address=**\${address.takeLast(5)}")
+        onDiagnostic("BT_TRANSPORT", "peer_ready=true address=**${address.takeLast(5)}")
         return true
     }
 
     fun send(address: String, bytes: ByteArray): Boolean {
         val session = sessions[address] ?: return false
         if (bytes.isEmpty() || bytes.size > MAX_FRAME) {
-            onDiagnostic("BT_TRANSPORT", "write_rejected address=**\${address.takeLast(5)} bytes=\${bytes.size}")
+            onDiagnostic("BT_TRANSPORT", "write_rejected address=**${address.takeLast(5)} bytes=${bytes.size}")
             return false
         }
         return sendSession(session, bytes)
@@ -341,12 +342,12 @@ class MeshClassicBluetoothTransport(
                 output.write(ByteBuffer.allocate(4).putInt(bytes.size).array())
                 output.write(bytes)
                 output.flush()
-                onDiagnostic("BT_FRAME_TX", "address=**\${session.address.takeLast(5)} bytes=\${bytes.size}")
+                onDiagnostic("BT_FRAME_TX", "address=**${session.address.takeLast(5)} bytes=${bytes.size}")
                 true
             } catch (error: Exception) {
                 onDiagnostic(
                     "BT_TRANSPORT",
-                    "write_failed address=**\${session.address.takeLast(5)} error=\${error.javaClass.simpleName}"
+                    "write_failed address=**${session.address.takeLast(5)} error=${error.javaClass.simpleName}"
                 )
                 closeSession(session, "write_failed")
                 false
@@ -373,11 +374,11 @@ class MeshClassicBluetoothTransport(
         ready.remove(session.address)
         closeQuietly(session.socket)
         onDisconnected(session.address)
-        onDiagnostic("BT_TRANSPORT", "socket_closed reason=\${reason} address=**\${session.address.takeLast(5)} " + snapshot())
+        onDiagnostic("BT_TRANSPORT", "socket_closed reason=${reason} address=**${session.address.takeLast(5)} " + snapshot())
     }
 
     private fun snapshot(): String =
-        "running=\${running} connecting=\${connecting.size} queued=\${connectTasks.size} sockets=\${sessions.size} ready=\${ready.size}"
+        "running=${running} connecting=${connecting.size} queued=${connectTasks.size} sockets=${sessions.size} ready=${ready.size}"
 
     private fun elapsedMs(startedAt: Long): Long =
         (System.nanoTime() - startedAt) / 1_000_000L
