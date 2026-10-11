@@ -67,7 +67,7 @@ class MeshBluetoothNode(
     @Volatile private var activeConnectAddress: String? = null
     private val connectQueueRunnable = Runnable { pumpConnectQueue() }
 
-    private val rfcomm = MeshClassicBluetoothTransport(
+    private val rfcomm: MeshClassicBluetoothTransport = MeshClassicBluetoothTransport(
         context, adapter, MeshProtocol.RFCOMM_SERVICE_UUID,
         { helloPayload() }, onDiagnostic,
         { address, bytes -> handleFrame(address, bytes) },
