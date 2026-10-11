@@ -120,7 +120,12 @@ class MeshClassicBluetoothTransport(
      */
     @SuppressLint("MissingPermission")
     fun connect(address: String, peerServiceUuid: UUID) {
-        if (!running || address.isBlank()) return
+        if (address.isBlank()) return
+        if (!running) {
+            onDiagnostic("BT_CONNECT_FAIL", "address=**" + address.takeLast(5) + " error=transport_not_running")
+            onConnectFinished(address, false)
+            return
+        }
         if (sessions.containsKey(address) || !connecting.add(address)) {
             onDiagnostic(
                 "BT_CONNECT_SKIP",
@@ -343,6 +348,18 @@ class MeshClassicBluetoothTransport(
         closeSession(session, reason)
     }
 
+    fun cancelPendingConnect(address: String, reason: String = "connect_timeout") {
+        val pending = pendingSockets.remove(address)
+        if (pending != null) {
+            closeQuietly(pending)
+            onDiagnostic("BT_TRANSPORT", "pending_connect_cancelled reason=" + reason + " address=**" + address.takeLast(5))
+        } else {
+            onDiagnostic("BT_TRANSPORT", "pending_connect_not_found reason=" + reason + " address=**" + address.takeLast(5))
+        }
+    }
+
+    fun isRunning(): Boolean = running
+
     private fun closeSession(session: Session, reason: String) {
         if (!sessions.remove(session.address, session)) return
         session.closed = true
@@ -359,7 +376,7 @@ class MeshClassicBluetoothTransport(
         (System.nanoTime() - startedAt) / 1_000_000L
 
     fun stop() {
-        if (!running) return
+        if (!running && io.isShutdown && connectIo.isShutdown) return
         running = false
 
         closeQuietly(serverSocket)
