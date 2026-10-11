@@ -43,6 +43,7 @@ class MeshBluetoothNode(
         private const val DISCOVERY_RETRY_MS = 2_000L
         private const val RECONNECT_DELAY_MS = 3_000L
         private const val PRESENCE_INTERVAL_MS = 10_000L
+        private const val CONNECT_TIMEOUT_MS = 20_000L
         private const val HANDSHAKE_TIMEOUT_MS = 15_000L
         private const val INITIAL_RETRY_MS = 1_500L
         private const val MAX_RETRY_MS = 30_000L
@@ -59,6 +60,7 @@ class MeshBluetoothNode(
     private val retryDelayMs = HashMap<String, Long>()
     private val retryAfterMs = HashMap<String, Long>()
     private val handshakeTimeouts = ConcurrentHashMap<String, Runnable>()
+    private val connectTimeouts = ConcurrentHashMap<String, Runnable>()
     private var receiverRegistered = false
     @Volatile private var running = false
     @Volatile private var discoveryActive = false
@@ -74,7 +76,9 @@ class MeshBluetoothNode(
         { address ->
             onDiagnostic("BT_RFCOMM", "connected address=**" + address.takeLast(5))
             handler.post {
-                if (!running || readyPeers.contains(address) || !rfcomm.isConnected(address)) return@post
+                if (!running) return@post
+                cancelConnectTimeout(address)
+                if (readyPeers.contains(address) || !rfcomm.isConnected(address)) return@post
                 connectingPeers.add(address)
                 candidateQueue.remove(address)
                 if (activeConnectAddress == null) activeConnectAddress = address
@@ -83,6 +87,7 @@ class MeshBluetoothNode(
         },
         { address ->
             handler.post {
+                cancelConnectTimeout(address)
                 cancelHandshakeTimeout(address)
                 val wasReady = readyPeers.remove(address)
                 peerNodeIds.remove(address)
@@ -99,6 +104,7 @@ class MeshBluetoothNode(
         { address, connected ->
             handler.post {
                 if (!running) return@post
+                cancelConnectTimeout(address)
                 if (connected || rfcomm.isConnected(address) || readyPeers.contains(address)) {
                     if (!readyPeers.contains(address)) {
                         connectingPeers.add(address)
@@ -348,7 +354,25 @@ class MeshBluetoothNode(
                 " queued=" + candidateQueue.size +
                 " discovery=" + discoveryActive
         )
+        scheduleConnectTimeout(address)
         rfcomm.connect(address, MeshProtocol.RFCOMM_SERVICE_UUID)
+    }
+
+    private fun scheduleConnectTimeout(address: String) {
+        cancelConnectTimeout(address)
+        val timeout = Runnable {
+            connectTimeouts.remove(address)
+            if (running && activeConnectAddress == address && !rfcomm.isConnected(address)) {
+                onDiagnostic("BT_CONNECT_TIMEOUT", "address=**" + address.takeLast(5) + " timeout_ms=" + CONNECT_TIMEOUT_MS)
+                rfcomm.cancelPendingConnect(address, "connect_timeout")
+            }
+        }
+        connectTimeouts[address] = timeout
+        handler.postDelayed(timeout, CONNECT_TIMEOUT_MS)
+    }
+
+    private fun cancelConnectTimeout(address: String) {
+        connectTimeouts.remove(address)?.let { handler.removeCallbacks(it) }
     }
 
     private fun scheduleConnectRetry(address: String, reason: String) {
@@ -435,6 +459,7 @@ class MeshBluetoothNode(
         }
         handler.post {
             if (!running) return@post
+            cancelConnectTimeout(address)
             cancelHandshakeTimeout(address)
             connectingPeers.remove(address)
             if (activeConnectAddress == address) activeConnectAddress = null
@@ -513,7 +538,7 @@ class MeshBluetoothNode(
     fun isBluetoothTransportReady(): Boolean =
         readyPeers.any { rfcomm.readyAddresses().contains(it) }
 
-    fun isHealthy(): Boolean = running && adapter.isEnabled && receiverRegistered
+    fun isHealthy(): Boolean = running && adapter.isEnabled && receiverRegistered && rfcomm.isRunning()
 
     @SuppressLint("MissingPermission")
     fun stop() {
@@ -526,6 +551,8 @@ class MeshBluetoothNode(
         handler.removeCallbacks(connectQueueRunnable)
         handshakeTimeouts.values.forEach { handler.removeCallbacks(it) }
         handshakeTimeouts.clear()
+        connectTimeouts.values.forEach { handler.removeCallbacks(it) }
+        connectTimeouts.clear()
         candidateQueue.clear()
         retryDelayMs.clear()
         retryAfterMs.clear()
