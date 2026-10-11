@@ -314,7 +314,7 @@ class MeshClassicBluetoothTransport(
     }
 
     private fun sendSession(session: Session, bytes: ByteArray): Boolean {
-        if (session.closed || !session.socket.isConnected || bytes.isEmpty() || bytes.size > MAX_FRAME) return false
+        if (session.closed || !session.socket.isConnected || bytes.isEmpty() || bytes.size > MeshBluetoothFrameCodec.MAX_FRAME) return false
 
         return synchronized(session.writerLock) {
             if (session.closed || sessions[session.address] !== session) return@synchronized false
