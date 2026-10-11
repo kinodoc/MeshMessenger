@@ -108,3 +108,38 @@ No Briar source files should be copied into MeshMessenger as part of this plan. 
 ## Immediate next step
 
 Before implementing the replacement, compare bugreport #175 and the successful GitHub Actions build/commit against the current `Concept`, backup and `main` histories. Select the proven app-level integration point, then implement the replacement behind the existing node callback contract on this isolated branch. Do not delete the old transport until the new one passes the two-device test gate.
+
+
+## Evidence from the actual bug reports
+
+Read-only inspection of the existing VPS report archive found the two relevant reports. No server files or data were changed.
+
+### Report #175 — known working checkpoint
+
+- Created: 2026-10-08 19:55:29 GMT+07:00.
+- App: v0.24.94 / versionCode 117.
+- Device: HUAWEI PRA-TL10, Android 8.0 / API 26.
+- Active network: Wi-Fi.
+- The final captured log lines show `BT_READY` at 19:55:05, 19:55:15 and 19:55:25, repeated `BT_PACKET_RX`, and `BT_DELIVERED` at 19:55:15 and 19:55:16. At those times the transport had one socket and one ready peer.
+- Across the captured 5,000-line diagnostic window: 15 `BT_READY`, 120 `BT_PACKET_RX`, 4 `BT_DELIVERED`, 84 `BT_CONNECT_FAIL`, and 210 `BT_CONNECT_QUEUE` events. Maximum observed state was connecting=10, queued=10, sockets=1, ready=1.
+
+Interpretation: the user-visible working checkpoint is real. It was not a clean transport state, however: successful traffic coexisted with many redundant/failed connection attempts. The rebuild should preserve the successful data path while removing the connection-attempt storm.
+
+### Report #214 — current failure example
+
+- Created: 2026-10-11 14:31:36 GMT+07:00.
+- App: v0.24.95 / versionCode 118.
+- Device: HXY MP06, Android 11 / API 30.
+- Active network: cellular.
+- The captured 5,000-line diagnostic window has zero `BT_READY`, zero `BT_PACKET_RX`, zero `BT_DELIVERED`, 112 `BT_CONNECT_FAIL`, and 115 `BT_CONNECT_QUEUE` events. Maximum observed state was connecting=3, queued=3, sockets=0, ready=0.
+- Some RFCOMM attempts fail after roughly 13–31 seconds. ACL connected/disconnected events occur, but no usable socket/READY transition follows. The report also includes `RELAY_PACKET stage=accepted online=false` events.
+
+Interpretation: this report fails before the authenticated/ready peer stage. It cannot by itself prove that MM1 caused the Bluetooth failure. It also differs from #175 in device, Android version, app version and active network, so it is not a controlled before/after comparison.
+
+## What the reports and source comparison establish
+
+- `BriarBluetoothTransport.kt` has the same Git blob SHA on the current `Concept` branch and current `main`. `MeshBluetoothNode.kt` is also byte-for-byte identical on those refs. The existing raw RFCOMM implementation therefore did not change between those two current source snapshots.
+- The code in current `main` does add `ContactCard.kt` and changes `MainActivity.kt`; the Relay transport itself was not part of the direct Concept-to-main file-change set. MM1 can still affect which NodeID/public-key pair is stored or selected, which in turn can break Relay routing, without modifying Relay socket code.
+- Report #175 predates the MM1 contact-card PR and proves that v0.24.94 could pass identity validation, reach READY and deliver messages. It also proves that the old transport could be noisy and unstable while messages were moving.
+- Therefore keep two failure domains separate: (A) RFCOMM discovery/connect/handshake, and (B) contact identity / Relay destination selection. The clean BT rewrite is justified by the connection storm and scattered lifecycle state; it must not silently alter MM1 or Relay while doing so.
+
