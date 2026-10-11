@@ -14,6 +14,7 @@ import android.os.Looper
 import android.util.Base64
 import androidx.core.content.ContextCompat
 import java.nio.charset.StandardCharsets
+import java.util.LinkedHashSet
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -42,6 +43,9 @@ class MeshBluetoothNode(
         private const val DISCOVERY_RETRY_MS = 2_000L
         private const val RECONNECT_DELAY_MS = 3_000L
         private const val PRESENCE_INTERVAL_MS = 10_000L
+        private const val HANDSHAKE_TIMEOUT_MS = 15_000L
+        private const val INITIAL_RETRY_MS = 1_500L
+        private const val MAX_RETRY_MS = 30_000L
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -51,38 +55,72 @@ class MeshBluetoothNode(
     private val peerNodeIds = ConcurrentHashMap<String, String>()
     private val readyPeers = ConcurrentHashMap.newKeySet<String>()
     private val connectingPeers = ConcurrentHashMap.newKeySet<String>()
+    private val candidateQueue = LinkedHashSet<String>()
+    private val retryDelayMs = HashMap<String, Long>()
+    private val retryAfterMs = HashMap<String, Long>()
+    private val handshakeTimeouts = ConcurrentHashMap<String, Runnable>()
     private var receiverRegistered = false
-    private var running = false
+    @Volatile private var running = false
     @Volatile private var discoveryActive = false
     private var discoveryDelayMs = INITIAL_DISCOVERY_DELAY_MS
-    // Only one RFCOMM connection attempt may be in flight at a time. Established peer connections are not limited.
-    private var activeConnectAddress: String? = null
+    // Connection attempts and retries are coordinated here, not in the socket layer.
+    @Volatile private var activeConnectAddress: String? = null
+    private val connectQueueRunnable = Runnable { pumpConnectQueue() }
 
-    private val rfcomm = BriarBluetoothTransport(
+    private val rfcomm = MeshClassicBluetoothTransport(
         context, adapter, MeshProtocol.RFCOMM_SERVICE_UUID,
         { helloPayload() }, onDiagnostic,
         { address, bytes -> handleFrame(address, bytes) },
         { address ->
-            connectingPeers.remove(address)
-            if (activeConnectAddress == address) activeConnectAddress = null
-            onDiagnostic("BT_RFCOMM", "connected address=**${address.takeLast(5)}")
+            onDiagnostic("BT_RFCOMM", "connected address=**" + address.takeLast(5))
+            handler.post {
+                if (!running || readyPeers.contains(address) || !rfcomm.isConnected(address)) return@post
+                connectingPeers.add(address)
+                candidateQueue.remove(address)
+                if (activeConnectAddress == null) activeConnectAddress = address
+                scheduleHandshakeTimeout(address)
+            }
         },
         { address ->
-            connectingPeers.remove(address)
-            if (activeConnectAddress == address) activeConnectAddress = null
-            readyPeers.remove(address)
-            peerNodeIds.remove(address)
-            onPeerCountChanged(peerCount())
-            if (running) {
-                handler.postDelayed({ if (running) maybeStartDiscovery() }, RECONNECT_DELAY_MS)
-            }
-        }        ,
-        { address, connected ->
-            if (!connected && activeConnectAddress == address) {
-                activeConnectAddress = null
+            handler.post {
+                cancelHandshakeTimeout(address)
+                val wasReady = readyPeers.remove(address)
+                peerNodeIds.remove(address)
                 connectingPeers.remove(address)
-                onDiagnostic("BT_CONNECT_STATE", "finished_failed address=**${address.takeLast(5)} active=false")
-                if (running) handler.post { maybeStartDiscovery() }
+                if (activeConnectAddress == address) activeConnectAddress = null
+                onPeerCountChanged(peerCount())
+                if (running) {
+                    scheduleConnectRetry(address, if (wasReady) "socket_lost" else "handshake_lost")
+                    pumpConnectQueue()
+                    handler.postDelayed({ if (running) maybeStartDiscovery() }, RECONNECT_DELAY_MS)
+                }
+            }
+        },
+        { address, connected ->
+            handler.post {
+                if (!running) return@post
+                if (connected || rfcomm.isConnected(address) || readyPeers.contains(address)) {
+                    if (!readyPeers.contains(address)) {
+                        connectingPeers.add(address)
+                        scheduleHandshakeTimeout(address)
+                    } else {
+                        connectingPeers.remove(address)
+                        if (activeConnectAddress == address) activeConnectAddress = null
+                        pumpConnectQueue()
+                    }
+                    onDiagnostic(
+                        "BT_CONNECT_STATE",
+                        "finished_connected address=**" + address.takeLast(5) +
+                            " ready=" + readyPeers.contains(address)
+                    )
+                } else {
+                    connectingPeers.remove(address)
+                    if (activeConnectAddress == address) activeConnectAddress = null
+                    onDiagnostic("BT_CONNECT_STATE", "finished_failed address=**" + address.takeLast(5))
+                    scheduleConnectRetry(address, "connect_failed")
+                    pumpConnectQueue()
+                    handler.postDelayed({ if (running) maybeStartDiscovery() }, RECONNECT_DELAY_MS)
+                }
             }
         }
     )
@@ -150,6 +188,9 @@ class MeshBluetoothNode(
         discoveryActive = false
         onDiagnostic("BT_STATE", "start enabled=true bonded=" + runCatching { adapter.bondedDevices.size }.getOrDefault(0) + " address_known=" + !adapter.address.isNullOrBlank())
         connectingPeers.clear()
+        candidateQueue.clear()
+        retryDelayMs.clear()
+        retryAfterMs.clear()
         activeConnectAddress = null
         registerReceiver()
         rfcomm.start()
@@ -218,18 +259,29 @@ class MeshBluetoothNode(
     @SuppressLint("MissingPermission")
     private fun maybeStartDiscovery() {
         if (!running || !adapter.isEnabled || discoveryActive) return
-        if (hasReadyPeers() || connectingPeers.isNotEmpty()) {
-            onDiagnostic("BT_DISCOVERY", "deferred ready=" + readyPeers.size + " connected=" + hasReadyPeers() + " connecting=" + connectingPeers.size + " adapter_discovering=" + runCatching { adapter.isDiscovering }.getOrDefault(false))
+        if (activeConnectAddress != null || connectingPeers.isNotEmpty()) {
+            onDiagnostic(
+                "BT_DISCOVERY",
+                "deferred active=**" + (activeConnectAddress?.takeLast(5) ?: "none") +
+                    " handshakes=" + connectingPeers.size +
+                    " ready=" + readyPeers.size
+            )
+            return
+        }
+        if (runCatching { adapter.isDiscovering }.getOrDefault(false)) {
+            discoveryActive = true
+            onDiagnostic("BT_DISCOVERY", "already_discovering=true")
             return
         }
 
         val started = runCatching { adapter.startDiscovery() }.getOrDefault(false)
         if (started) {
             discoveryActive = true
-            onDiagnostic("BT_DISCOVERY", "start=true")
+            discoveryDelayMs = INITIAL_DISCOVERY_DELAY_MS
+            onDiagnostic("BT_DISCOVERY", "start=true ready=" + readyPeers.size)
         } else {
             discoveryDelayMs = (discoveryDelayMs * 2).coerceAtMost(MAX_DISCOVERY_DELAY_MS)
-            onDiagnostic("BT_DISCOVERY", "start=false next_ms=$discoveryDelayMs")
+            onDiagnostic("BT_DISCOVERY", "start=false next_ms=" + discoveryDelayMs)
             handler.postDelayed({ if (running) maybeStartDiscovery() }, discoveryDelayMs)
         }
     }
@@ -240,25 +292,98 @@ class MeshBluetoothNode(
 
     @SuppressLint("MissingPermission")
     private fun connectIfNeeded(address: String) {
-        if (!running || address == adapter.address) return
-        if (readyPeers.contains(address) || connectingPeers.contains(address)) {
-            onDiagnostic("BT_CONNECT_SKIP", "reason=duplicate address=**" + address.takeLast(5) + " ready=" + readyPeers.contains(address) + " connecting=" + connectingPeers.contains(address))
+        if (!running || address.isBlank() || address == adapter.address) return
+        if (readyPeers.contains(address) || connectingPeers.contains(address) || rfcomm.isConnected(address)) {
+            onDiagnostic(
+                "BT_CONNECT_SKIP",
+                "reason=peer_already_active address=**" + address.takeLast(5) +
+                    " ready=" + readyPeers.contains(address) +
+                    " connecting=" + connectingPeers.contains(address) +
+                    " socket=" + rfcomm.isConnected(address)
+            )
             return
         }
 
-        if (activeConnectAddress != null) {
-            onDiagnostic("BT_CONNECT_SKIP", "reason=active_attempt address=**${address.takeLast(5)} active=**${activeConnectAddress!!.takeLast(5)}")
+        val added = candidateQueue.add(address)
+        if (added) {
+            onDiagnostic("BT_CONNECT_CANDIDATE", "address=**" + address.takeLast(5) + " queued=" + candidateQueue.size)
+        }
+        pumpConnectQueue()
+    }
+
+    private fun pumpConnectQueue() {
+        if (!running || activeConnectAddress != null || connectingPeers.isNotEmpty()) return
+
+        val now = System.currentTimeMillis()
+        candidateQueue.removeAll { address ->
+            readyPeers.contains(address) || rfcomm.isConnected(address) || connectingPeers.contains(address)
+        }
+        val address = candidateQueue.firstOrNull { (retryAfterMs[it] ?: 0L) <= now }
+        if (address == null) {
+            val nextRetry = candidateQueue.mapNotNull { retryAfterMs[it] }
+                .filter { it > now }
+                .minOrNull()
+            if (nextRetry != null) {
+                handler.removeCallbacks(connectQueueRunnable)
+                handler.postDelayed(connectQueueRunnable, (nextRetry - now).coerceAtLeast(100L))
+            }
             return
         }
+
+        candidateQueue.remove(address)
         activeConnectAddress = address
         connectingPeers.add(address)
+
         if (discoveryActive || runCatching { adapter.isDiscovering }.getOrDefault(false)) {
             runCatching { adapter.cancelDiscovery() }
             discoveryActive = false
             onDiagnostic("BT_DISCOVERY", "cancel_for_connect address=**" + address.takeLast(5))
         }
-        onDiagnostic("BT_RFCOMM", "connect_requested address=**" + address.takeLast(5) + " ready=" + readyPeers.size + " connecting=" + connectingPeers.size + " discovery=" + discoveryActive)
+
+        onDiagnostic(
+            "BT_RFCOMM",
+            "connect_requested address=**" + address.takeLast(5) +
+                " ready=" + readyPeers.size +
+                " connecting=" + connectingPeers.size +
+                " queued=" + candidateQueue.size +
+                " discovery=" + discoveryActive
+        )
         rfcomm.connect(address, MeshProtocol.RFCOMM_SERVICE_UUID)
+    }
+
+    private fun scheduleConnectRetry(address: String, reason: String) {
+        if (!running || address.isBlank() || readyPeers.contains(address)) return
+        val now = System.currentTimeMillis()
+        if ((retryAfterMs[address] ?: 0L) > now) return
+
+        val delay = retryDelayMs[address] ?: INITIAL_RETRY_MS
+        retryDelayMs[address] = (delay * 2L).coerceAtMost(MAX_RETRY_MS)
+        retryAfterMs[address] = now + delay
+        candidateQueue.add(address)
+        onDiagnostic(
+            "BT_RETRY_SCHEDULED",
+            "reason=" + reason + " address=**" + address.takeLast(5) + " delay_ms=" + delay
+        )
+        handler.removeCallbacks(connectQueueRunnable)
+        handler.postDelayed(connectQueueRunnable, delay)
+    }
+
+    private fun scheduleHandshakeTimeout(address: String) {
+        cancelHandshakeTimeout(address)
+        if (readyPeers.contains(address)) return
+        val timeout = Runnable {
+            handshakeTimeouts.remove(address)
+            if (running && !readyPeers.contains(address) && rfcomm.isConnected(address)) {
+                onDiagnostic("BT_HANDSHAKE_TIMEOUT", "address=**" + address.takeLast(5))
+                rfcomm.close(address, "handshake_timeout")
+            }
+        }
+        handshakeTimeouts[address] = timeout
+        handler.postDelayed(timeout, HANDSHAKE_TIMEOUT_MS)
+    }
+
+    private fun cancelHandshakeTimeout(address: String) {
+        handshakeTimeouts.remove(address)?.let { handler.removeCallbacks(it) }
     }
 
     @SuppressLint("MissingPermission")
@@ -301,15 +426,29 @@ class MeshBluetoothNode(
             onDiagnostic("BT_READY", "identity_mismatch address=**${address.takeLast(5)}")
             return
         }
+        val firstReady = readyPeers.add(address)
         peerNodeIds[address] = peerId
-        readyPeers.add(address)
-        onDiagnostic("BT_PEER_STATE", "ready_count=" + readyPeers.size + " peer_count=" + peerCount())
-        rfcomm.markReady(address)
-        discoveryDelayMs = INITIAL_DISCOVERY_DELAY_MS
-        onDiagnostic("BT_READY", "peer=${peerId.take(12)} address=**${address.takeLast(5)}")
-        onPeer(peerId, parts[2].trim().ifBlank { peerId.take(8) }, key)
-        onPeerCountChanged(peerCount())
-        flushQueue()
+        if (!rfcomm.markReady(address)) {
+            if (firstReady) readyPeers.remove(address)
+            onDiagnostic("BT_READY", "socket_missing address=**" + address.takeLast(5))
+            return
+        }
+        handler.post {
+            if (!running) return@post
+            cancelHandshakeTimeout(address)
+            connectingPeers.remove(address)
+            if (activeConnectAddress == address) activeConnectAddress = null
+            candidateQueue.remove(address)
+            retryDelayMs.remove(address)
+            retryAfterMs.remove(address)
+            discoveryDelayMs = INITIAL_DISCOVERY_DELAY_MS
+            onDiagnostic("BT_PEER_STATE", "ready_count=" + readyPeers.size + " peer_count=" + peerCount())
+            onDiagnostic("BT_READY", "peer=" + peerId.take(12) + " address=**" + address.takeLast(5))
+            onPeer(peerId, parts[2].trim().ifBlank { peerId.take(8) }, key)
+            onPeerCountChanged(peerCount())
+            flushQueue()
+            pumpConnectQueue()
+        }
     }
 
     private fun handlePacket(address: String, packet: MeshPacket) {
@@ -384,6 +523,12 @@ class MeshBluetoothNode(
         discoveryDelayMs = INITIAL_DISCOVERY_DELAY_MS
         handler.removeCallbacks(discoveryLoop)
         handler.removeCallbacks(presenceLoop)
+        handler.removeCallbacks(connectQueueRunnable)
+        handshakeTimeouts.values.forEach { handler.removeCallbacks(it) }
+        handshakeTimeouts.clear()
+        candidateQueue.clear()
+        retryDelayMs.clear()
+        retryAfterMs.clear()
         runCatching { adapter.cancelDiscovery() }
         rfcomm.stop()
         if (receiverRegistered) runCatching { context.unregisterReceiver(receiver) }
