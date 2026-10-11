@@ -7,10 +7,7 @@ import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
-import java.io.EOFException
-import java.io.InputStream
 import java.io.OutputStream
-import java.nio.ByteBuffer
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -42,7 +39,6 @@ class MeshClassicBluetoothTransport(
 ) {
     companion object {
         private const val SERVICE_NAME = "RFCOMM"
-        private const val MAX_FRAME = 1024 * 1024
     }
 
     private enum class Direction { INCOMING, OUTGOING }
@@ -278,14 +274,9 @@ class MeshClassicBluetoothTransport(
         try {
             val input = session.socket.inputStream
             while (running && !session.closed && session.socket.isConnected) {
-                val length = readInt(input)
-                if (length !in 1..MAX_FRAME) {
-                    throw IllegalArgumentException("bad_frame_length=${length}")
-                }
-                val payload = ByteArray(length)
-                readFully(input, payload)
+                val payload = MeshBluetoothFrameCodec.read(input)
                 if (sessions[session.address] !== session) break
-                onDiagnostic("BT_FRAME_RX", "address=**${session.address.takeLast(5)} bytes=${length}")
+                onDiagnostic("BT_FRAME_RX", "address=**${session.address.takeLast(5)} bytes=${payload.size}")
                 onFrame(session.address, payload)
             }
         } catch (error: Exception) {
@@ -300,21 +291,6 @@ class MeshClassicBluetoothTransport(
         }
     }
 
-    private fun readInt(input: InputStream): Int {
-        val header = ByteArray(4)
-        readFully(input, header)
-        return ByteBuffer.wrap(header).int
-    }
-
-    private fun readFully(input: InputStream, target: ByteArray) {
-        var offset = 0
-        while (offset < target.size) {
-            val count = input.read(target, offset, target.size - offset)
-            if (count < 0) throw EOFException()
-            offset += count
-        }
-    }
-
     fun markReady(address: String): Boolean {
         val session = sessions[address] ?: return false
         if (session.closed || !session.socket.isConnected) return false
@@ -325,7 +301,7 @@ class MeshClassicBluetoothTransport(
 
     fun send(address: String, bytes: ByteArray): Boolean {
         val session = sessions[address] ?: return false
-        if (bytes.isEmpty() || bytes.size > MAX_FRAME) {
+        if (bytes.isEmpty() || bytes.size > MeshBluetoothFrameCodec.MAX_FRAME) {
             onDiagnostic("BT_TRANSPORT", "write_rejected address=**${address.takeLast(5)} bytes=${bytes.size}")
             return false
         }
@@ -339,8 +315,7 @@ class MeshClassicBluetoothTransport(
             if (session.closed || sessions[session.address] !== session) return@synchronized false
             try {
                 val output: OutputStream = session.socket.outputStream
-                output.write(ByteBuffer.allocate(4).putInt(bytes.size).array())
-                output.write(bytes)
+                output.write(MeshBluetoothFrameCodec.encode(bytes))
                 output.flush()
                 onDiagnostic("BT_FRAME_TX", "address=**${session.address.takeLast(5)} bytes=${bytes.size}")
                 true
