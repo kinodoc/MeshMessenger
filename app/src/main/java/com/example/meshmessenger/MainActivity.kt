@@ -632,7 +632,12 @@ class MainActivity : ComponentActivity() {
         // The service persists incoming messages before broadcasting them. Refresh the
         // current conversation immediately; otherwise the saved message may remain
         // invisible until the user closes and reopens the chat.
-        if (selected?.nodeId == sourceId) refreshOpenChat?.invoke()
+        if (selected?.nodeId == sourceId) {
+            refreshOpenChat?.invoke()
+            // Refresh once more after persistence and UI scheduling settle.
+            updateSelectedContactStatus()
+            window.decorView.postDelayed({ if (selected?.nodeId == sourceId) refreshOpenChat?.invoke() }, 120L)
+        }
         val contact = contacts.all().firstOrNull { it.nodeId == sourceId }
         log.text = if (contact != null) {
             "Получено от ${contact.name}: $text"
@@ -646,59 +651,48 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(24, 4, 24, 4)
         }
-
-        val name = EditText(this).apply {
-            hint = "Имя контакта"
-        }
-
+        val name = EditText(this).apply { hint = "Имя контакта (необязательно)" }
         val card = EditText(this).apply {
-            hint = "Вставь данные QR-карточки"
+            hint = "Вставь код контактной карточки"
             minLines = 4
+            setTextIsSelectable(true)
         }
-
         pendingQrField = card
-
         val scan = Button(this).apply {
             text = "▣ СКАНИРОВАТЬ QR КАМЕРОЙ"
             setOnClickListener {
-                if (androidx.core.content.ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                    launchQrScanner()
-                } else {
-                    cameraPermission.launch(Manifest.permission.CAMERA)
-                }
+                if (androidx.core.content.ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchQrScanner()
+                else cameraPermission.launch(Manifest.permission.CAMERA)
             }
         }
-
-        box.addView(name)
-        box.addView(card)
-        box.addView(scan)
-
+        box.addView(name); box.addView(card); box.addView(scan)
         AlertDialogBuilder(box, "Добавить контакт") { }
     }
 
     private fun launchQrScanner() {
-        qrScanner.launch(
-            ScanOptions().apply {
-                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                setPrompt("Наведите камеру на QR-код контакта")
-                setBeepEnabled(true)
-                setOrientationLocked(true)
-            }
-        )
+        qrScanner.launch(ScanOptions().apply {
+            setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+            setPrompt("Наведите камеру на QR-код контакта")
+            setBeepEnabled(true)
+            setOrientationLocked(true)
+        })
     }
 
     private fun AlertDialogBuilder(view: LinearLayout, title: String, ignored: () -> Unit) {
         android.app.AlertDialog.Builder(this).setTitle(title).setView(view)
             .setPositiveButton("Добавить") { _, _ ->
                 val fields = view.children().toList().filterIsInstance<EditText>()
-                val name = fields[0].text.toString().ifBlank { "Контакт" }
+                val manualName = fields[0].text.toString().trim()
                 val raw = fields[1].text.toString().trim()
-                val parts = raw.split("|", limit = 4)
-                val publicKey = parts.getOrNull(2).orEmpty()
-                if (parts.size >= 3 && parts[0].isNotBlank() && publicKey.isNotBlank() && runCatching { CryptoManager.publicKeyFromBase64(publicKey) }.isSuccess) {
-                    contacts.upsert(ContactStore.Contact(parts[0], name, publicKey))
-                    log.text = "Контакт добавлен: $name • поиск через BT и Relay"
-                } else log.text = "Неверная QR-карточка. Формат: NodeID|имя|publicKey"
+                runCatching {
+                    val parsed = ContactCard.parse(raw)
+                    val finalName = manualName.ifBlank { parsed.displayName }
+                    require(parsed.nodeId != identity.nodeId) { "Нельзя добавить самого себя" }
+                    contacts.upsert(ContactStore.Contact(parsed.nodeId, finalName.take(64), parsed.publicKeyBase64))
+                    log.text = if (parsed.isLegacy) "Контакт добавлен и проверен по ключу: $finalName" else "Контакт добавлен: $finalName • ID и ключ совпадают"
+                }.onFailure { error ->
+                    log.text = "Контакт НЕ добавлен: " + (error.message ?: "неверная карточка")
+                }
             }.setNegativeButton("Отмена", null).show()
     }
 
@@ -1109,6 +1103,31 @@ class MainActivity : ComponentActivity() {
             android.view.WindowManager.LayoutParams.MATCH_PARENT,
             android.view.WindowManager.LayoutParams.MATCH_PARENT
         )
+        chatDialog.window?.setSoftInputMode(
+            android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        )
+
+        // Keep the newest messages visible above the software keyboard.
+        val keyboardLayoutListener = android.view.ViewTreeObserver.OnGlobalLayoutListener {
+            val visible = android.graphics.Rect()
+            chatFrame.getWindowVisibleDisplayFrame(visible)
+            val rootHeight = chatFrame.rootView.height
+            val keyboardHeight = rootHeight - visible.bottom
+            if (keyboardHeight > rootHeight / 5) {
+                scroll.post { scroll.fullScroll(android.view.View.FOCUS_DOWN) }
+            }
+        }
+        chatFrame.viewTreeObserver.addOnGlobalLayoutListener(keyboardLayoutListener)
+        input.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) {
+                scroll.postDelayed({ scroll.fullScroll(android.view.View.FOCUS_DOWN) }, 120L)
+                scroll.postDelayed({ scroll.fullScroll(android.view.View.FOCUS_DOWN) }, 320L)
+            }
+        }
+        chatDialog.setOnDismissListener {
+            chatFrame.viewTreeObserver.removeOnGlobalLayoutListener(keyboardLayoutListener)
+            if (selected?.nodeId == contact.nodeId) refreshOpenChat = null
+        }
 
         refresh()
     }
@@ -1236,7 +1255,7 @@ class MainActivity : ComponentActivity() {
 
 
     private fun showOwnQr() {
-        val card = "${identity.nodeId}|${identity.displayName}|${identity.publicKeyBase64}"
+        val card = ContactCard.create(identity.nodeId, identity.displayName, identity.publicKeyBase64)
         val image = makeQr(card, 720)
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
