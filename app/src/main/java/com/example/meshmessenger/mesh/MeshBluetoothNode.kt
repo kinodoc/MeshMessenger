@@ -55,6 +55,8 @@ class MeshBluetoothNode(
     private var running = false
     @Volatile private var discoveryActive = false
     private var discoveryDelayMs = INITIAL_DISCOVERY_DELAY_MS
+    private var discoveryAttempt = 0L
+    private var discoveryRetryRunnable: Runnable? = null
     // Only one RFCOMM connection attempt may be in flight at a time. Established peer connections are not limited.
     private var activeConnectAddress: String? = null
 
@@ -74,7 +76,7 @@ class MeshBluetoothNode(
             peerNodeIds.remove(address)
             onPeerCountChanged(peerCount())
             if (running) {
-                handler.postDelayed({ if (running) maybeStartDiscovery() }, RECONNECT_DELAY_MS)
+                scheduleDiscoveryRetry(RECONNECT_DELAY_MS, "disconnected")
             }
         }        ,
         { address, connected ->
@@ -82,7 +84,7 @@ class MeshBluetoothNode(
                 activeConnectAddress = null
                 connectingPeers.remove(address)
                 onDiagnostic("BT_CONNECT_STATE", "finished_failed address=**${address.takeLast(5)} active=false")
-                if (running) handler.post { maybeStartDiscovery() }
+                if (running) handler.post { maybeStartDiscovery("connect_failed") }
             }
         }
     )
@@ -94,13 +96,16 @@ class MeshBluetoothNode(
             when (intent?.action) {
                 BluetoothAdapter.ACTION_DISCOVERY_STARTED -> {
                     discoveryActive = true
-                    onDiagnostic("BT_DISCOVERY", "started bonded=" + runCatching { adapter.bondedDevices.size }.getOrDefault(0) + " ready=" + readyPeers.size + " connecting=" + connectingPeers.size)
+                    discoveryDelayMs = INITIAL_DISCOVERY_DELAY_MS
+                    discoveryRetryRunnable?.let { handler.removeCallbacks(it) }
+                    discoveryRetryRunnable = null
+                    onDiagnostic("BT_DISCOVERY", "started attempt=$discoveryAttempt bonded=" + runCatching { adapter.bondedDevices.size }.getOrDefault(0) + " ready=" + readyPeers.size + " connecting=" + connectingPeers.size)
                 }
 
                 BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
                     discoveryActive = false
                     onDiagnostic("BT_DISCOVERY", "finished ready=" + readyPeers.size + " connecting=" + connectingPeers.size)
-                    handler.postDelayed({ if (running) maybeStartDiscovery() }, DISCOVERY_RETRY_MS)
+                    scheduleDiscoveryRetry(DISCOVERY_RETRY_MS, "discovery_finished")
                 }
                 BluetoothAdapter.ACTION_STATE_CHANGED -> {
                     val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
@@ -155,7 +160,7 @@ class MeshBluetoothNode(
         rfcomm.start()
         onDiagnostic("BT", "started transport=RFCOMM")
         connectBondedPeers()
-        handler.postDelayed({ if (running) maybeStartDiscovery() }, 750L)
+        handler.postDelayed({ if (running) maybeStartDiscovery("startup") }, 750L)
         handler.postDelayed(presenceLoop, PRESENCE_INTERVAL_MS)
         handler.postDelayed(discoveryLoop, DISCOVERY_INTERVAL_MS)
     }
@@ -163,7 +168,7 @@ class MeshBluetoothNode(
     private val discoveryLoop = object : Runnable {
         override fun run() {
             if (!running) return
-            maybeStartDiscovery()
+            maybeStartDiscovery("periodic")
             handler.postDelayed(this, DISCOVERY_INTERVAL_MS)
         }
     }
@@ -216,22 +221,65 @@ class MeshBluetoothNode(
         readyPeers.any { rfcomm.readyAddresses().contains(it) }
 
     @SuppressLint("MissingPermission")
-    private fun maybeStartDiscovery() {
-        if (!running || !adapter.isEnabled || discoveryActive) return
-        if (hasReadyPeers() || connectingPeers.isNotEmpty()) {
-            onDiagnostic("BT_DISCOVERY", "deferred ready=" + readyPeers.size + " connected=" + hasReadyPeers() + " connecting=" + connectingPeers.size + " adapter_discovering=" + runCatching { adapter.isDiscovering }.getOrDefault(false))
+    private fun maybeStartDiscovery(reason: String = "scheduled") {
+        if (!running || !adapter.isEnabled) return
+
+        val systemDiscovering = runCatching { adapter.isDiscovering }.getOrDefault(false)
+        if (systemDiscovering) {
+            discoveryActive = true
+            onDiagnostic("BT_DISCOVERY", "already_discovering reason=$reason attempt=$discoveryAttempt")
+            return
+        }
+        if (discoveryActive) {
+            discoveryActive = false
+            onDiagnostic("BT_DISCOVERY", "state_reconciled adapter_discovering=false reason=$reason")
+        }
+
+        if (activeConnectAddress != null || connectingPeers.isNotEmpty()) {
+            onDiagnostic("BT_DISCOVERY", "deferred reason=$reason active_connect=" +
+                (activeConnectAddress?.takeLast(5) ?: "none") +
+                " ready=" + readyPeers.size + " connecting=" + connectingPeers.size)
+            return
+        }
+        if (hasReadyPeers()) {
+            onDiagnostic("BT_DISCOVERY", "deferred reason=$reason ready=" + readyPeers.size + " connected=true")
+            return
+        }
+        if (discoveryRetryRunnable != null) {
+            onDiagnostic("BT_DISCOVERY", "retry_coalesced reason=$reason next_ms=$discoveryDelayMs")
             return
         }
 
+        discoveryAttempt++
         val started = runCatching { adapter.startDiscovery() }.getOrDefault(false)
         if (started) {
             discoveryActive = true
-            onDiagnostic("BT_DISCOVERY", "start=true")
+            discoveryDelayMs = INITIAL_DISCOVERY_DELAY_MS
+            onDiagnostic("BT_DISCOVERY", "start=true attempt=$discoveryAttempt reason=$reason ready=" +
+                readyPeers.size + " connecting=" + connectingPeers.size + " sockets=" + runCatching { rfcomm.readyAddresses().size }.getOrDefault(0))
         } else {
             discoveryDelayMs = (discoveryDelayMs * 2).coerceAtMost(MAX_DISCOVERY_DELAY_MS)
-            onDiagnostic("BT_DISCOVERY", "start=false next_ms=$discoveryDelayMs")
-            handler.postDelayed({ if (running) maybeStartDiscovery() }, discoveryDelayMs)
+            onDiagnostic("BT_DISCOVERY", "start=false attempt=$discoveryAttempt reason=$reason next_ms=$discoveryDelayMs adapter_discovering=" +
+                runCatching { adapter.isDiscovering }.getOrDefault(false) +
+                " ready=" + readyPeers.size + " connecting=" + connectingPeers.size)
+            scheduleDiscoveryRetry(discoveryDelayMs, "start_failed")
         }
+    }
+
+    private fun scheduleDiscoveryRetry(delayMs: Long, reason: String) {
+        if (!running || discoveryRetryRunnable != null) {
+            if (discoveryRetryRunnable != null) {
+                onDiagnostic("BT_DISCOVERY", "retry_coalesced reason=$reason next_ms=$delayMs")
+            }
+            return
+        }
+        val retry = Runnable {
+            discoveryRetryRunnable = null
+            if (running) maybeStartDiscovery("retry:$reason")
+        }
+        discoveryRetryRunnable = retry
+        onDiagnostic("BT_DISCOVERY", "retry_scheduled reason=$reason delay_ms=$delayMs attempt=$discoveryAttempt")
+        handler.postDelayed(retry, delayMs)
     }
 
     @SuppressLint("MissingPermission")
@@ -382,6 +430,8 @@ class MeshBluetoothNode(
         running = false
         discoveryActive = false
         discoveryDelayMs = INITIAL_DISCOVERY_DELAY_MS
+        discoveryRetryRunnable?.let { handler.removeCallbacks(it) }
+        discoveryRetryRunnable = null
         handler.removeCallbacks(discoveryLoop)
         handler.removeCallbacks(presenceLoop)
         runCatching { adapter.cancelDiscovery() }
