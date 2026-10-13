@@ -36,9 +36,6 @@ object MeshBugReport {
             appendLine("created=${Date()}")
         }
 
-        // Do not archive raw Bluetooth snapshots: some Android implementations include
-        // nearby device names or addresses. The event log carries BT state and error codes.
-        val bluetoothSummary = "Raw Bluetooth snapshot omitted for privacy. See mesh_diagnostics.log for the extended BT lifecycle trace.\n"
         val safeTrace = crashTrace.orEmpty().lineSequence()
             .filter { it.startsWith("event=") || it.startsWith("exception=") || it.startsWith(" at ") || it.startsWith("cause=") }
             .map { line ->
