@@ -12,6 +12,26 @@ Turn the experimental `Concept` build into a conventional, internet-connected me
 - A visible `Concept` app label on experimental builds.
 - Do not merge experimental work into `main` without a separate, explicit decision.
 
+## Initial repository audit
+
+Observed on the `Concept` branch at commit `0d799861e3a01041692d36e47e116b9cbea46bf7`:
+
+- The app is a Kotlin Android Views application (minSdk 26, targetSdk 36), not Jetpack Compose. Most screens and dialogs are assembled programmatically in a large `MainActivity.kt`; therefore UI changes should be extracted incrementally instead of replacing the entire activity in one risky rewrite.
+- The app already has an internet relay transport, `MeshRelayTransport`, connecting to a fixed VPS endpoint over TLS with a SHA-256 certificate pin. It sends encrypted `MeshPacket` envelopes, has a pending-message queue, retry logic, delivery acknowledgements, and peer presence events.
+- Text history is stored locally by `ChatStore`; identity/contact storage, encrypted packet routing, and the foreground service are already separate classes and should be reused where appropriate.
+- The relay is a text/packet store-and-forward transport, not yet a complete media upload service or WebRTC signaling/media service. Do not assume it can carry voice recordings or live audio without a designed protocol and capacity limits.
+- Current home screen is a transport/debug control panel with BT / BLE+Relay / Relay choices, rather than a chat-first messenger. The existing style uses black surfaces and cyan accents but monospace type and strong glow effects; the redesign should retain the palette while improving readability and reducing visual noise.
+- The manifest currently declares Bluetooth as a required hardware feature and contains Bluetooth permissions. These must not be removed until the internet-only path has been tested and the final migration scope is approved.
+- The Concept manifest label is already `Concept`; the current update manager reads a Concept-specific update manifest from the VPS.
+
+### Risks and questions to resolve
+
+1. The relay host and port are compiled into the Android client. Before altering connectivity, map the deployed relay protocol/server implementation, its authentication and identity-binding rules, queue limits, and TLS certificate renewal procedure.
+2. Current encrypted messages use ECDH P-256 and AES-GCM. Review key derivation, identity verification/contact exchange, replay behavior, and group-key design before reusing this scheme for group voice or media.
+3. Current chat history stores text only. Voice attachments need a versioned message model, local media files, upload/download states, integrity checks, quotas, and retention/cleanup rules.
+4. Live PTT requires a separate authenticated signaling flow and reliable connectivity across NAT/mobile networks. Evaluate WebRTC with Opus and STUN/TURN; for group calls, decide whether a small SFU is justified by the expected participant count and VPS budget.
+5. Current foreground-service lifecycle is tied to mesh/Bluetooth watchdog logic. Rework service responsibilities deliberately for internet messaging and call states; do not simply disable the watchdog without replacement behavior.
+
 ## Proposed screen map
 
 1. **Chats** — searchable conversation list, contact avatar/initials, last message, timestamp, unread count, delivery state, and a clear new-chat action.
@@ -28,23 +48,12 @@ Turn the experimental `Concept` build into a conventional, internet-connected me
 - Do not claim end-to-end encryption until key management, signaling authentication, media encryption, server access, and group membership changes have been reviewed and tested.
 - The app must never transmit microphone audio merely because a room invitation was received. The user must accept the invitation and deliberately press the talk control.
 
-## Architecture review before implementation
-
-Inspect the current Android project and existing VPS services before selecting dependencies or changing protocols:
-
-1. Map current identity/contact storage, message persistence, delivery state, QR/contact exchange, notifications, foreground-service behavior, update manager, and bug-report flow.
-2. Determine whether an authenticated internet messaging API already exists. Do not assume the current relay is a general-purpose internet backend.
-3. Identify hosting constraints and existing reverse-proxy/TLS setup. Keep services private where possible; do not expose an unauthenticated port or create a new public endpoint as a shortcut.
-4. Decide message API, delivery/retry semantics, media storage/expiry, signaling, STUN/TURN, and group-call topology.
-5. Check Android minimum SDK, dependency/license compatibility, microphone permissions, foreground-service restrictions, battery use, and background behavior on Android 11+.
-6. Add tests for authorization, reconnects, duplicate delivery, offline queues, declined/expired invitations, room membership, and permission denial.
-
 ## Incremental delivery plan
 
 ### Phase 0 — Inventory and baseline
 - Record the current `Concept` commit and inspect build workflows and app structure.
 - Preserve current behavior as a reference; do not delete BLE code yet.
-- Produce a concise architecture map and backend gap list.
+- Inspect the deployed relay server and confirm its protocol/security contract, then produce a concise backend gap list.
 
 ### Phase 1 — UI foundation
 - Establish the new dark visual system and navigation/screen shells.
