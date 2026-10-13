@@ -2,7 +2,7 @@
 
 ## Goal and branch policy
 
-The redesign is developed directly on `main`. Do not continue active development in `Concept` or feature branches. Keep changes incremental and buildable; do not remove existing transports until their replacements pass device tests.
+The redesign is developed directly on `main`. Do not continue active development in `Concept` or feature branches. All changes go directly to `main`. Bluetooth transport is explicitly out of scope and must be removed completely. The only supported messaging transport is internet relay; no Bluetooth fallback, permissions, discovery, or RFCOMM code may remain.
 
 ## Product direction
 
@@ -12,6 +12,7 @@ The redesign is developed directly on `main`. Do not continue active development
 - Add recorded voice messages and push-to-talk (PTT) rooms with explicit invitations, acceptance/decline, and group participation.
 - Keep microphone transmission user-initiated; receiving an invitation must never activate the microphone.
 - Retain working identity, contact exchange, QR onboarding, message history, delivery acknowledgements, diagnostics, and update behavior while migrating.
+- Rebuild all screens and visual styling as a cohesive messenger, not a dashboard with a messenger screen added on top.
 
 ## Current architecture observed
 
@@ -28,7 +29,7 @@ The redesign is developed directly on `main`. Do not continue active development
 ### Phase 0 — Preserve and map
 1. Record the current baseline and keep changes small.
 2. Map the relay server protocol, authentication/identity binding, queue limits, TLS pin renewal, and existing VPS deployment before changing transport contracts.
-3. Keep existing Bluetooth code until the internet-first path has been validated end-to-end.
+3. Remove Bluetooth transport code and all Bluetooth-related UI, permissions, services, diagnostics, and resources; verify the internet relay is the sole messaging transport.
 
 ### Phase 1 — Messenger UI
 1. Establish readable typography, dark surfaces, consistent spacing, and accessible controls.
@@ -53,13 +54,15 @@ The redesign is developed directly on `main`. Do not continue active development
 - Review encryption, authorization, membership changes, and server access before making end-to-end security claims.
 
 ### Phase 5 — migration and cleanup
-- Remove Bluetooth only after internet messaging, voice messages, PTT, contact onboarding, and recovery tests pass on real devices and the user confirms removal.
+- Bluetooth is removed by explicit product decision. Validate internet text messaging first, then implement voice messages and PTT as separate phases.
 - Build and verify through GitHub Actions.
 - Keep intermediate main commits from overwriting a stable release; publish a release only with an explicit matching `v*` tag.
 
 ## Acceptance criteria
 
 - The app feels like a conventional messenger and remains readable on small Android screens.
+- No Bluetooth permissions, transport classes, transport-mode selector, or Bluetooth-only startup dependency remain.
+- Text, recorded voice messages, and PTT are designed as first-class product features, with microphone use always explicitly user-initiated.
 - Existing contacts, QR exchange, history, and delivery state are not silently lost.
 - Failed sends remain visible and can retry without duplicate messages.
 - Media is authenticated, bounded in size, and cleaned up according to a documented retention policy.
