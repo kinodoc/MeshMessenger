@@ -179,31 +179,6 @@ class MainActivity : ComponentActivity() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-    private class TronVideoBackgroundView(context: Context) : android.widget.VideoView(context) {
-        init {
-            setBackgroundColor(Color.rgb(0, 3, 8))
-            setVideoURI(Uri.parse("android.resource://${context.packageName}/${R.raw.tron_loop}"))
-            setOnPreparedListener { player ->
-                player.isLooping = true
-                player.setVolume(0f, 0f)
-                post {
-                    val videoRatio = player.videoWidth / player.videoHeight.toFloat().coerceAtLeast(1f)
-                    val viewRatio = width / height.toFloat().coerceAtLeast(1f)
-                    if (videoRatio > viewRatio) scaleX = videoRatio / viewRatio
-                    else if (videoRatio < viewRatio) scaleY = viewRatio / videoRatio
-                    start()
-                }
-            }
-            setOnErrorListener { _, _, _ ->
-                setBackgroundColor(Color.rgb(0, 3, 8))
-                true
-            }
-        }
-        override fun onDetachedFromWindow() {
-            runCatching { stopPlayback() }
-            super.onDetachedFromWindow()
-        }
-    }
     private fun homeText(textValue: String, size: Float = 16f): TextView =
         TextView(this).apply {
             text = textValue
@@ -281,7 +256,7 @@ class MainActivity : ComponentActivity() {
         titleBlock.addView(status)
         titleRow.addView(titleBlock)
         titleRow.addView(messengerIconButton("＋", "Добавить контакт") { addContactDialog() })
-        titleRow.addView(messengerIconButton("⋮", "Настройки") { buildLegacyHome() })
+        titleRow.addView(messengerIconButton("⋮", "Настройки") { showSettingsScreen() })
         root.addView(titleRow)
         root.addView(peerStatus)
 
@@ -452,7 +427,7 @@ class MainActivity : ComponentActivity() {
         }
         bottom.addView(messengerBottomButton("Контакты") { contactsDialog() }, LinearLayout.LayoutParams(0, dp(48), 1f))
         bottom.addView(messengerBottomButton("Мой QR") { showOwnQr() }, LinearLayout.LayoutParams(0, dp(48), 1f))
-        bottom.addView(messengerBottomButton("Настройки") { buildLegacyHome() }, LinearLayout.LayoutParams(0, dp(48), 1f))
+        bottom.addView(messengerBottomButton("Настройки") { showSettingsScreen() }, LinearLayout.LayoutParams(0, dp(48), 1f))
         root.addView(bottom)
         root.addView(updateStatus)
         setContentView(root)
@@ -504,109 +479,34 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { onClick() }
         }
 
-    private fun buildLegacyHome() {
-        val scroll = ScrollView(this).apply {
-            isFillViewport = true
-            setBackgroundColor(Color.TRANSPARENT)
-        }
+    private fun showSettingsScreen() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(14), dp(18), dp(22))
+            setPadding(dp(20), dp(22), dp(20), dp(24))
+            setBackgroundColor(Color.rgb(5, 7, 11))
         }
-        scroll.addView(root)
-        val rootBackground = FrameLayout(this).apply {
-            setBackgroundColor(Color.rgb(2, 8, 19))
-            addView(TronVideoBackgroundView(this@MainActivity), FrameLayout.LayoutParams(-1, -1))
-            addView(scroll, FrameLayout.LayoutParams(-1, -1))
-        }
-
-        status = TextView(this).apply {
-            textSize = 22f
+        root.addView(TextView(this).apply {
+            text = "Настройки"
+            textSize = 28f
             typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-            setTextColor(Color.rgb(0, 240, 255))
-            setShadowLayer(dp(10).toFloat(), 0f, 0f, Color.rgb(0, 180, 255))
-            setPadding(dp(8), dp(8), dp(8), dp(4))
-        }
-        root.addView(status)
-        root.addView(homeText("Мой Node ID: ${identity.nodeId}", 14f).apply {
-            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-            setTextColor(Color.WHITE)
-            setShadowLayer(dp(6).toFloat(), 0f, 0f, Color.rgb(0, 240, 255))
+            setTextColor(Color.rgb(238, 246, 250))
+            setPadding(0, 0, 0, dp(8))
         })
-
-        root.addView(Button(this).apply {
-            text = "ИМЯ: ${identity.displayName}"
-            textSize = 16f
-            setTextColor(Color.rgb(211, 229, 255))
-            isAllCaps = false
-            gravity = android.view.Gravity.CENTER
-            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_name)
-            setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_person, 0, 0, 0)
-            compoundDrawablePadding = dp(12)
-            val iconWidth = compoundDrawables[0]?.intrinsicWidth?.coerceAtLeast(0) ?: 0
-            setPadding(dp(16), dp(5), dp(16) + iconWidth + dp(12), dp(5))
-            minHeight = dp(54)
-            setOnClickListener { editOwnName() }
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(54)
-            ).apply { setMargins(0, dp(6), 0, dp(8)) }
+        root.addView(TextView(this).apply {
+            text = "Mesh Messenger · " + BuildConfig.VERSION_NAME
+            textSize = 14f
+            setTextColor(Color.rgb(130, 150, 164))
+            setPadding(0, 0, 0, dp(18))
         })
-
-        root.addView(homeText("Версия приложения: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", 15f))
-
-        peerStatus = TextView(this).apply {
-            textSize = 15f
-            setTextColor(Color.rgb(105, 210, 255))
-            gravity = android.view.Gravity.CENTER_VERTICAL
-            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_channel)
-            setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_channel_off, 0, 0, 0)
-            compoundDrawablePadding = dp(12)
-            setPadding(dp(14), dp(8), dp(14), dp(8))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(62)
-            ).apply { setMargins(0, dp(5), 0, dp(8)) }
-        }
-        root.addView(peerStatus)
-
-        meshButton = actionButton(
-            if (meshActive) "ОСТАНОВИТЬ MESH" else "ЗАПУСТИТЬ MESH",
-            R.drawable.ic_stop
-        ) {
-            if (meshActionPending) return@actionButton
-            if (meshActive) {
-                beginMeshAction(false)
-                startService(Intent(this@MainActivity, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_STOP))
-            } else {
-                startService(Intent(this@MainActivity, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_START))
-            }
-        }
-        root.addView(meshButton)
-
-        root.addView(actionButton("СОСТОЯНИЕ ФОНОВОЙ РАБОТЫ", R.drawable.ic_battery) { showBatteryStatus() })
-        root.addView(actionButton("ДОБАВИТЬ КОНТАКТ", R.drawable.ic_add) { addContactDialog() })
+        root.addView(actionButton("ПРОФИЛЬ И ИМЯ", R.drawable.ic_person) { editOwnName() })
         root.addView(actionButton("МОЙ QR-КОД", R.drawable.ic_qr) { showOwnQr() })
         root.addView(actionButton("КОНТАКТЫ", R.drawable.ic_contacts) { contactsDialog() })
+        root.addView(actionButton("ФОНОВАЯ РАБОТА И БАТАРЕЯ", R.drawable.ic_battery) { showBatteryStatus() })
         root.addView(actionButton("ПРОВЕРИТЬ ОБНОВЛЕНИЕ", R.drawable.ic_update) { checkForUpdates(true) })
-        root.addView(actionButton("ОТПРАВИТЬ BUGREPORT", R.drawable.ic_bug) { showBugReportScreen() })
-
-        updateStatus = homeText("", 14f).apply {
-            setPadding(dp(2), dp(8), dp(2), dp(4))
-        }
-        root.addView(updateStatus)
-
-        root.addView(TextView(this).apply {
-            text = "СДЕЛАЛ ДМИТРИЙ ШАЛИМОВ"
-            textSize = 15f
-            setTextColor(Color.rgb(211, 229, 255))
-            gravity = android.view.Gravity.CENTER
-            setPadding(0, dp(12), 0, dp(8))
-        })
-
-        setContentView(rootBackground)
-        status.text = if (meshActive) "MESH АКТИВЕН" else "MESH ВЫКЛЮЧЕН"
+        root.addView(actionButton("ОТПРАВИТЬ ДИАГНОСТИЧЕСКИЙ ОТЧЁТ", R.drawable.ic_bug) { showBugReportScreen() })
+        root.addView(actionButton("НАЗАД К ЧАТАМ", R.drawable.ic_channel_off) { buildHome() })
+        setContentView(root)
     }
-
-
 
     private fun showBugReportScreen() {
         val root = LinearLayout(this).apply {
@@ -1176,8 +1076,7 @@ class MainActivity : ComponentActivity() {
         root.addView(inputRow)
 
         val chatFrame = FrameLayout(this).apply {
-            setBackgroundColor(Color.rgb(2, 8, 19))
-            addView(TronVideoBackgroundView(this@MainActivity), FrameLayout.LayoutParams(-1, -1))
+            setBackgroundColor(Color.rgb(5, 7, 11))
             addView(root, FrameLayout.LayoutParams(-1, -1))
         }
 
@@ -1253,7 +1152,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         val lastSeen = contacts.get(contact.nodeId)?.lastSeenAt ?: 0L
-        // Presence is transport-independent and is refreshed by BT and Relay.
+        // Presence is transport-independent and refreshed by the internet relay.
         val online = lastSeen > 0L && System.currentTimeMillis() - lastSeen <= 30_000L
         view.text = if (online) "● В СЕТИ" else "● НЕ В СЕТИ"
         view.setTextColor(if (online) 0xFF00FF9D.toInt() else 0xFF6B8799.toInt())
