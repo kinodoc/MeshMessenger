@@ -436,12 +436,14 @@ class MainActivity : ComponentActivity() {
                     setTextColor(Color.rgb(104, 126, 139))
                 })
                 trailing.addView(TextView(this).apply {
-                    text = when (latest?.delivery) {
-                        ChatStore.Delivery.DELIVERED -> if (latest.mine) "✓✓" else ""
-                        ChatStore.Delivery.WAITING -> "◷"
-                        ChatStore.Delivery.NOT_SENT -> "!"
-                        else -> if (latest?.mine == true) "✓" else ""
-                    }
+                    text = latest?.let { message ->
+                        when (message.delivery) {
+                            ChatStore.Delivery.DELIVERED -> if (message.mine) "✓✓" else ""
+                            ChatStore.Delivery.WAITING -> "◷"
+                            ChatStore.Delivery.NOT_SENT -> "!"
+                            else -> if (message.mine) "✓" else ""
+                        }
+                    } ?: ""
                     textSize = 12f
                     setTextColor(if (latest?.delivery == ChatStore.Delivery.NOT_SENT) Color.rgb(255, 145, 110) else Color.rgb(0, 195, 220))
                     setPadding(0, dp(6), 0, 0)
