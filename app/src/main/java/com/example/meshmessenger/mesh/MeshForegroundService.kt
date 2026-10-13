@@ -5,8 +5,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
@@ -63,19 +61,15 @@ class MeshForegroundService : Service() {
         private const val KEY_ENABLED = "mesh_enabled"
     }
 
-    private var node: MeshBluetoothNode? = null
     private var meshEnabled = false
-    private var transportMode = "BOTH"
     private var relayTransport: MeshRelayTransport? = null
     private lateinit var pendingMesh: PendingMessageStore
     private lateinit var contacts: ContactStore
     private lateinit var chats: ChatStore
-    private var btPeerCount = 0
     private var relayPeerCount = 0
     private var lastPeerStatusDiagnostic: String? = null
     private var nodeStartedAtMs = 0L
     private lateinit var diagnostics: MeshDiagnostics
-    private lateinit var bluetoothMonitor: MeshBluetoothMonitor
 
     private val retryHandler = Handler(Looper.getMainLooper())
     private val autoBugReportInProgress = AtomicBoolean(false)
@@ -104,7 +98,7 @@ class MeshForegroundService : Service() {
             }
             Thread {
                 try {
-                    val report = MeshBugReport.create(this@MeshForegroundService, diagnostics, bluetoothMonitor.snapshot())
+                    val report = MeshBugReport.create(this@MeshForegroundService, diagnostics)
                     val result = MeshBugReportUploader.upload(report)
                     report.delete()
                     diagnostics.event("BUGREPORT_AUTO_UPLOAD", "result=$result")
@@ -122,36 +116,12 @@ class MeshForegroundService : Service() {
     private val watchdogRunnable = object : Runnable {
         override fun run() {
             if (meshEnabled) {
-                val adapter = runCatching {
-                    (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
-                }.getOrNull()
-                if (transportMode == "RELAY") {
-                    if (node != null) { node?.stop(); node = null; btPeerCount = 0; sendPeerStatus() }
-                    sendMeshStatus(false)
-                } else if (adapter?.isEnabled != true) {
-                    if (node != null) {
-                        diagnostics.event("BT_WATCHDOG", "bluetooth_disabled")
-                        node?.stop()
-                        node = null
-                    }
-                    sendMeshStatus(false)
-                } else if (node == null) {
-                    diagnostics.event("BT_WATCHDOG", "node_missing_restart")
-                    startMesh(startBluetooth = true)
-                } else if (node?.isHealthy() == true) {
-                    sendMeshStatus(true)
-                } else if (System.currentTimeMillis() - nodeStartedAtMs >= 30_000L) {
-                    diagnostics.event("BT_WATCHDOG", "node_unhealthy_restart")
-                    node?.stop()
-                    node = null
-                    startMesh(startBluetooth = true)
-                } else {
-                    diagnostics.event("BT_WATCHDOG", "node_initializing")
-                    updateNotification("Mesh запускается…")
+                if (relayTransport != null) sendMeshStatus(true)
+                else {
+                    diagnostics.event("RELAY_WATCHDOG", "transport_missing_restart")
+                    startMesh()
                 }
-            } else {
-                sendMeshStatus(false)
-            }
+            } else sendMeshStatus(false)
             retryHandler.postDelayed(this, 10_000L)
         }
     }
@@ -159,7 +129,6 @@ class MeshForegroundService : Service() {
     private val retryRunnable = object : Runnable {
         override fun run() {
             relayTransport?.retryPending()
-            node?.retryPending()
             retryHandler.postDelayed(this, RETRY_INTERVAL_MS)
         }
     }
@@ -169,11 +138,6 @@ class MeshForegroundService : Service() {
 
         diagnostics = MeshDiagnostics(this)
         diagnostics.event("SERVICE_CREATE")
-        val bluetoothAdapter = runCatching {
-            (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
-        }.getOrNull()
-        bluetoothMonitor = MeshBluetoothMonitor(this, bluetoothAdapter, diagnostics)
-        bluetoothMonitor.start()
         val previousCrashHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             diagnostics.crash(thread, throwable)
@@ -193,136 +157,64 @@ class MeshForegroundService : Service() {
         retryHandler.post(retryRunnable)
         retryHandler.postDelayed(autoBugReportRunnable, AUTO_BUGREPORT_INTERVAL_MS)
         meshEnabled = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_ENABLED, true)
-        transportMode = getSharedPreferences(PREFS, MODE_PRIVATE).getString("transport_mode", "BOTH") ?: "BOTH"
-        startMesh(startBluetooth = meshEnabled && transportMode != "RELAY")
+        startMesh()
         retryHandler.postDelayed(watchdogRunnable, 10_000L)
     }
 
-    override fun onStartCommand(
-        intent: Intent?,
-        flags: Int,
-        startId: Int
-    ): Int {
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-
             ACTION_APP_START -> {
                 updateNotification("Mesh Messenger работает")
-                if (meshEnabled && transportMode != "RELAY" && (node == null || node?.isHealthy() != true)) startMesh(startBluetooth = true)
-                else if (node?.isHealthy() == true) sendMeshStatus(true)
-                else sendMeshStatus(false)
+                if (meshEnabled && relayTransport == null) startMesh()
+                else sendMeshStatus(meshEnabled && relayTransport != null)
             }
-
             ACTION_MESH_STATUS_REQUEST -> {
-                if (node?.isHealthy() == true) sendMeshStatus(true)
-                else if (!meshEnabled) sendMeshStatus(false)
-                // While enabled but initializing, do not publish a false/off state.
-                // MainActivity registers its peer-status receiver on every start;
-                // replay current channel counts so the UI does not default to disconnected.
-                btPeerCount = node?.onlinePeerCount() ?: 0
+                sendMeshStatus(meshEnabled && relayTransport != null)
                 sendPeerStatus()
             }
-
             ACTION_START -> {
                 meshEnabled = true
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, true).apply()
-                startMesh(startBluetooth = transportMode != "RELAY")
+                startMesh()
             }
-
-            ACTION_SET_MODE -> {
-                val requested = intent.getStringExtra(EXTRA_TRANSPORT_MODE)?.uppercase()
-                if (requested in setOf("BT", "BOTH", "RELAY")) {
-                    transportMode = requested!!
-                    getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("transport_mode", transportMode).putBoolean(KEY_ENABLED, true).apply()
-                    meshEnabled = true
-                    diagnostics.event("TRANSPORT_MODE", "mode=$transportMode")
-                    node?.stop()
-                    node = null
-                    btPeerCount = 0
-                    stopRelayLayer()
-                    sendPeerStatus()
-                    startMesh(startBluetooth = transportMode != "RELAY")
-                    retryHandler.removeCallbacks(retryRunnable)
-                    retryHandler.post(retryRunnable)
-                }
-            }
-
             ACTION_STOP -> {
                 meshEnabled = false
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, false).apply()
                 stopMesh()
                 updateNotification("Mesh Messenger работает")
             }
-
-            ACTION_PROFILE_NAME_CHANGED -> {
-                sendProfileNameUpdate(intent.getStringExtra(EXTRA_CONTACT_NAME))
-            }
-
+            ACTION_PROFILE_NAME_CHANGED -> sendProfileNameUpdate(intent.getStringExtra(EXTRA_CONTACT_NAME))
             ACTION_SEND_MESH -> {
                 val encoded = intent.getByteArrayExtra(EXTRA_PACKET)
-                diagnostics.event("PACKET_SEND_REQUEST", "bytes=${encoded?.size ?: 0} mode=$transportMode bt_ready=${node?.isBluetoothTransportReady() == true} relay_ready=${relayTransport != null}")
-                android.util.Log.d("MeshBluetoothDiag", "service_send_mesh bytes=${encoded?.size ?: 0} nodeReady=${node != null}")
-                if (encoded != null) {
-                    runCatching {
-                        val packet = MeshPacket.decode(encoded)
-                        if (packet != null) {
-                            android.util.Log.d("MeshBluetoothDiag", "service_packet_decoded id=${packet.messageId} src=${packet.sourceId.take(8)} dst=${packet.destinationId.take(8)}")
-                            diagnostics.event("PACKET_DECODED", "bytes=${encoded.size} bt_ready=${node?.isBluetoothTransportReady() == true} relay_ready=${relayTransport != null}")
-                            if (transportMode != "RELAY") runCatching { node?.send(packet) }
-                                .onFailure { diagnostics.event("BT_SEND_ERROR", "error_type=${it.javaClass.simpleName}") }
-                            if (transportMode != "BT") runCatching { relayTransport?.send(packet) }
-                                .onFailure { diagnostics.event("RELAY_SEND_ERROR", "error_type=${it.javaClass.simpleName}") }
-                        } else {
-                            diagnostics.event("PACKET_DECODE_ERROR", "bytes=${encoded.size}")
-                            android.util.Log.w("MeshBluetoothDiag", "service_packet_decode_failed bytes=${encoded.size}")
-                        }
-                    }.onFailure {
-                        diagnostics.event("PACKET_SEND_ERROR", "error_type=${it.javaClass.simpleName}")
-                        updateNotification("Ошибка отправки Mesh-пакета")
-                    }
+                diagnostics.event("PACKET_SEND_REQUEST", "bytes=" + (encoded?.size ?: 0) + " relay_ready=" + (relayTransport != null))
+                if (encoded != null) runCatching {
+                    val packet = MeshPacket.decode(encoded)
+                    if (packet != null) {
+                        diagnostics.event("PACKET_DECODED", "bytes=" + encoded.size + " relay_ready=" + (relayTransport != null))
+                        if (relayTransport != null) relayTransport?.send(packet)
+                        else diagnostics.event("RELAY_SEND_DEFERRED", "reason=transport_unavailable")
+                    } else diagnostics.event("PACKET_DECODE_ERROR", "bytes=" + encoded.size)
+                }.onFailure {
+                    diagnostics.event("PACKET_SEND_ERROR", "error_type=" + it.javaClass.simpleName)
+                    updateNotification("Ошибка отправки сообщения")
                 }
             }
-
-
-            else -> {
-                sendMeshStatus(node != null)
-            }
         }
-
         return START_STICKY
     }
 
-    private fun startMesh(startBluetooth: Boolean) {
-        diagnostics.event("MESH_START", "bluetooth=$startBluetooth")
-        if (startBluetooth && node != null) {
-            if (node?.isHealthy() == true) {
-                sendMeshStatus(true)
-                return
-            }
-            if (System.currentTimeMillis() - nodeStartedAtMs < 30_000L) {
-                diagnostics.event("BT_START", "already_initializing")
-                return
-            }
-            diagnostics.event("BT_WATCHDOG", "replacing_unhealthy_node")
-            node?.stop()
-            node = null
-        }
-
+    private fun startMesh() {
+        diagnostics.event("MESSENGER_START", "transport=internet")
         val identity = IdentityStore(this)
-
-        val router = MeshRouter(
-            identity.nodeId,
-            identity.keyPair.private
-        ).also {
+        val router = MeshRouter(identity.nodeId, identity.keyPair.private).also {
             it.identityPublicBytes = identity.keyPair.public.encoded
         }
-
         val queue = PendingMessageStore(this)
-
-        // Apply the persisted transport mode before starting transports.
-        // In BT-only mode do not briefly start Relay and immediately stop it.
-        if (transportMode == "BT") stopRelayLayer()
-
-        if (transportMode != "BT" && relayTransport == null) runCatching {
+        if (relayTransport != null) {
+            sendMeshStatus(true)
+            return
+        }
+        runCatching {
             relayTransport = MeshRelayTransport(
                 localId = identity.nodeId,
                 localName = identity.displayName,
@@ -347,77 +239,21 @@ class MeshForegroundService : Service() {
                 },
                 onPeerCount = { count ->
                     relayPeerCount = count
-                    diagnostics.event("RELAY_PEER_COUNT", "count=$count")
+                    diagnostics.event("RELAY_PEER_COUNT", "count=" + count)
                     sendPeerStatus()
                     if (count > 0) retryHandler.post { relayTransport?.retryPending() }
                 },
                 onDiagnostic = { type, detail -> diagnostics.event(type, detail) }
             ).also { it.start() }
+            sendMeshStatus(true)
         }.onFailure {
             relayTransport = null
-            updateNotification("Relay: не удалось запустить транспорт")
+            sendMeshStatus(false)
+            updateNotification("Интернет-транспорт пока недоступен")
+            diagnostics.event("RELAY_START_ERROR", "error_type=" + it.javaClass.simpleName)
             android.util.Log.e("MeshMessenger", "Relay transport start failed", it)
         }
-
-        if (!startBluetooth || transportMode == "RELAY") {
-            sendMeshStatus(false)
-            return
-        }
-
-        val adapter = runCatching {
-            (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
-        }.getOrNull()
-
-        if (adapter != null) {
-            runCatching {
-                nodeStartedAtMs = System.currentTimeMillis()
-                node = MeshBluetoothNode(
-                    this,
-                    adapter,
-                    identity.nodeId,
-                    identity.displayName,
-                    identity.keyPair.public.encoded,
-                    router,
-                    queue,
-                    { updateNotification(it) },
-                    { text, sourceId, packet ->
-                        handleIncomingPersisted(text, sourceId, packet, ACTION_MESH_MESSAGE)
-                    },
-                    { nodeId, name, publicKey ->
-                        val key = android.util.Base64.encodeToString(publicKey, android.util.Base64.NO_WRAP)
-                        contacts.upsert(
-                            ContactStore.Contact(
-                                nodeId = nodeId,
-                                name = name.trim().ifBlank { nodeId.take(8) },
-                                publicKeyBase64 = key,
-                                lastSeenAt = System.currentTimeMillis()
-                            )
-                        )
-                    },
-                    { packetId -> sendDeliveryStatus(packetId) },
-                    { count ->
-                        btPeerCount = count
-                        sendPeerStatus()
-                        if (count > 0) retryHandler.post { node?.retryPending() }
-                    },
-                    { type, detail -> diagnostics.event(type, detail) }
-                ).also {
-                    it.start()
-                }
-            }.onFailure {
-                node = null
-                updateNotification("BT: не удалось запустить mesh")
-                android.util.Log.e("MeshMessenger", "BT mesh start failed", it)
-            }
-        }
-
-        val active = node?.isHealthy() == true
-        updateNotification(if (active) "Mesh работает" else "Mesh запускается…")
-        // Classic Bluetooth RFCOMM startup and discovery run asynchronously.
-        // Do not reset the UI to off while initialization is still in progress.
-        if (active) sendMeshStatus(true)
     }
-
 
     private fun sendDeliveryStatus(packetId: String) {
         android.util.Log.i("MeshBluetoothDiag", "delivery_status_broadcast packetId=$packetId")
@@ -449,8 +285,7 @@ class MeshForegroundService : Service() {
             }.getOrNull() ?: return@forEach
 
             pendingMesh.enqueue(packet)
-            if (transportMode != "RELAY") runCatching { node?.send(packet) }
-            if (transportMode != "BT") runCatching { relayTransport?.send(packet) }
+            runCatching { relayTransport?.send(packet) }
         }
         diagnostics.event("PROFILE_NAME_UPDATE", "contacts=${contactsSnapshot.size}")
     }
@@ -513,12 +348,8 @@ class MeshForegroundService : Service() {
     }
 
     private fun stopMesh() {
-        diagnostics.event("MESH_STOP")
-        // Stopping BT leaves the internet relay active independently.
-        node?.stop()
-        node = null
-        btPeerCount = 0
-        sendPeerStatus()
+        diagnostics.event("MESSENGER_STOP")
+        stopRelayLayer()
         sendMeshStatus(false)
     }
 
@@ -621,19 +452,16 @@ class MeshForegroundService : Service() {
     }
 
     private fun sendPeerStatus() {
-        // UI status broadcasts may be repeated for lifecycle/replay requests,
-        // but diagnostic logging should only record actual count changes.
-        val detail = "bt=$btPeerCount,relay=$relayPeerCount"
+        val detail = "relay=" + relayPeerCount
         if (detail != lastPeerStatusDiagnostic) {
             lastPeerStatusDiagnostic = detail
             diagnostics.event("PEER_STATUS", detail)
         }
-        val intent = Intent(ACTION_PEER_STATUS).apply {
+        sendBroadcast(Intent(ACTION_PEER_STATUS).apply {
             setPackage(packageName)
-            putExtra(EXTRA_BT_COUNT, btPeerCount)
+            putExtra(EXTRA_BT_COUNT, 0)
             putExtra(EXTRA_RELAY_COUNT, relayPeerCount)
-        }
-        sendBroadcast(intent)
+        })
     }
 
     private fun sendMeshStatus(active: Boolean) {
@@ -662,7 +490,6 @@ class MeshForegroundService : Service() {
         retryHandler.removeCallbacks(autoBugReportRunnable)
         retryHandler.removeCallbacks(watchdogRunnable)
         retryHandler.removeCallbacks(retryRunnable)
-        bluetoothMonitor.stop()
         stopMesh()
         stopRelayLayer()
         super.onDestroy()
