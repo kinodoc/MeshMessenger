@@ -45,7 +45,7 @@ class MeshMessengerApp : Application() {
     private fun uploadPendingCrash() {
         val trace = runCatching { crashFile.readText().take(48_000) }.getOrNull() ?: return
         val report = runCatching {
-            MeshBugReport.create(this, MeshDiagnostics(this), "automatic crash report", trace)
+            MeshBugReport.create(this, MeshDiagnostics(this), trace)
         }.getOrNull() ?: return
         try {
             val connection = (URL(REPORT_URL).openConnection() as HttpURLConnection).apply {
