@@ -198,7 +198,7 @@ class MainActivity : ComponentActivity() {
         TextView(this).apply {
             text = textValue
             textSize = size
-            typeface = Typeface.create("monospace", Typeface.NORMAL)
+            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
             setTextColor(Color.rgb(190, 235, 245))
             setShadowLayer(dp(4).toFloat(), 0f, 0f, Color.rgb(0, 150, 180))
             setPadding(0, dp(5), 0, dp(5))
@@ -208,7 +208,7 @@ class MainActivity : ComponentActivity() {
         Button(this).apply {
             text = label
             textSize = 15f
-            typeface = Typeface.create("monospace", Typeface.BOLD)
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
             setTextColor(Color.rgb(0, 240, 255))
             isAllCaps = false
             gravity = android.view.Gravity.CENTER
@@ -244,14 +244,14 @@ class MainActivity : ComponentActivity() {
 
         status = TextView(this).apply {
             textSize = 22f
-            typeface = Typeface.create("monospace", Typeface.BOLD)
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
             setTextColor(Color.rgb(0, 240, 255))
             setShadowLayer(dp(10).toFloat(), 0f, 0f, Color.rgb(0, 180, 255))
             setPadding(dp(8), dp(8), dp(8), dp(4))
         }
         root.addView(status)
         root.addView(homeText("Мой Node ID: ${identity.nodeId}", 14f).apply {
-            typeface = Typeface.create("monospace", Typeface.NORMAL)
+            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
             setTextColor(Color.WHITE)
             setShadowLayer(dp(6).toFloat(), 0f, 0f, Color.rgb(0, 240, 255))
         })
@@ -398,7 +398,7 @@ class MainActivity : ComponentActivity() {
         root.addView(TextView(this).apply {
             text = "ОТПРАВКА БАГРЕПОРТА"
             textSize = 22f
-            typeface = Typeface.create("monospace", Typeface.BOLD)
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
             setTextColor(Color.rgb(0, 240, 255))
             setShadowLayer(dp(8).toFloat(), 0f, 0f, Color.rgb(0, 150, 255))
             setPadding(0, 0, 0, dp(18))
@@ -412,7 +412,7 @@ class MainActivity : ComponentActivity() {
         val result = TextView(this).apply {
             text = ""
             textSize = 15f
-            typeface = Typeface.create("monospace", Typeface.BOLD)
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
             setTextColor(Color.rgb(211, 229, 255))
             setPadding(0, dp(12), 0, dp(12))
             contentDescription = "Результат отправки багрепорта"
@@ -815,7 +815,7 @@ class MainActivity : ComponentActivity() {
                 val avatar = TextView(this@MainActivity).apply {
                     text = contact.name.trim().firstOrNull()?.uppercase() ?: "?"
                     textSize = 22f
-                    typeface = Typeface.create("monospace", Typeface.BOLD)
+                    typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
                     gravity = android.view.Gravity.CENTER
                     setTextColor(0xFF00E5FF.toInt())
                     background = android.graphics.drawable.GradientDrawable().apply {
@@ -836,13 +836,13 @@ class MainActivity : ComponentActivity() {
                 info.addView(TextView(this@MainActivity).apply {
                     text = contact.name
                     textSize = 18f
-                    typeface = Typeface.create("monospace", Typeface.BOLD)
+                    typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
                     setTextColor(0xFFE7F7FF.toInt())
                 })
                 info.addView(TextView(this@MainActivity).apply {
                     text = "NODE  ${contact.nodeId.take(16)}"
                     textSize = 10f
-                    typeface = Typeface.create("monospace", Typeface.NORMAL)
+                    typeface = Typeface.create("sans-serif", Typeface.NORMAL)
                     setTextColor(0xFF6B8799.toInt())
                     setPadding(0, dp(4), 0, 0)
                 })
@@ -851,7 +851,7 @@ class MainActivity : ComponentActivity() {
                     val online = lastSeen > 0L && System.currentTimeMillis() - lastSeen <= 30_000L
                     text = if (online) "● В СЕТИ" else "● НЕ В СЕТИ"
                     textSize = 11f
-                    typeface = Typeface.create("monospace", Typeface.BOLD)
+                    typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
                     setTextColor(if (online) 0xFF00FF9D.toInt() else 0xFF607C8D.toInt())
                     setPadding(0, dp(5), 0, 0)
                 })
@@ -911,7 +911,7 @@ class MainActivity : ComponentActivity() {
         val nodeInfo = TextView(this).apply {
             text = "NODE ${contact.nodeId.take(16)}"
             textSize = 12f
-            typeface = Typeface.create("monospace", Typeface.NORMAL)
+            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
             setTextColor(0xFF8AA7B8.toInt())
             setPadding(0, dp(5), 0, 0)
         }
