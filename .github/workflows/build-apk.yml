@@ -3,9 +3,9 @@ name: Build Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [ "main", "Concept" ]
+    branches: [ "main", "Concept", "concept/**" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "Concept" ]
 
 jobs:
   build:
