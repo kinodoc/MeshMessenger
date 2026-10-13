@@ -1,13 +1,9 @@
 package com.example.meshmessenger.mesh
 
-import android.Manifest
-import android.bluetooth.BluetoothManager
 import android.content.Context
-import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
-import androidx.core.content.ContextCompat
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.text.SimpleDateFormat
@@ -21,7 +17,6 @@ object MeshBugReport {
     fun create(
         context: Context,
         diagnostics: MeshDiagnostics,
-        bluetoothSnapshot: String,
         crashTrace: String? = null
     ): File {
         val dir = context.getExternalFilesDir("Download") ?: context.cacheDir
@@ -37,7 +32,7 @@ object MeshBugReport {
             appendLine("api=${Build.VERSION.SDK_INT}")
             appendLine("manufacturer=${Build.MANUFACTURER}")
             appendLine("model=${Build.MODEL}")
-            appendLine("diagnostic_schema=4")
+            appendLine("diagnostic_schema=5")
             appendLine("created=${Date()}")
         }
 
@@ -57,7 +52,6 @@ object MeshBugReport {
         ZipOutputStream(file.outputStream().buffered()).use { zip ->
             put(zip, "report.txt", meta)
             put(zip, "runtime_state.txt", runtimeState(context))
-            put(zip, "bluetooth.txt", bluetoothSummary)
             put(zip, "mesh_diagnostics.log", diagnostics.readForUpload())
             if (safeTrace.isNotBlank()) put(zip, "crash_trace.txt", safeTrace.take(48_000))
         }
@@ -71,13 +65,6 @@ object MeshBugReport {
      */
     private fun runtimeState(context: Context): String = buildString {
         appendLine("runtime_diagnostics_schema=1")
-        appendLine("bluetooth_permission=" + permission(context, Manifest.permission.BLUETOOTH_CONNECT))
-        appendLine("bluetooth_scan_permission=" + permission(context, Manifest.permission.BLUETOOTH_SCAN))
-        appendLine("location_permission=" + permission(context, Manifest.permission.ACCESS_FINE_LOCATION))
-        appendLine("bluetooth_enabled=" + runCatching {
-            val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-            manager?.adapter?.isEnabled?.toString() ?: "unknown"
-        }.getOrDefault("unknown"))
         appendLine("active_network_transport=" + runCatching {
             val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             val active = manager?.activeNetwork
@@ -87,22 +74,11 @@ object MeshBugReport {
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH) -> "bluetooth"
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
                 else -> "other"
             }
         }.getOrDefault("unknown"))
     }
-
-    private fun permission(context: Context, name: String): String =
-        if (Build.VERSION.SDK_INT < 31 && (name == Manifest.permission.BLUETOOTH_CONNECT ||
-                name == Manifest.permission.BLUETOOTH_SCAN)) {
-            "not_required_on_this_android"
-        } else if (ContextCompat.checkSelfPermission(context, name) == PackageManager.PERMISSION_GRANTED) {
-            "granted"
-        } else {
-            "not_granted"
-        }
 
     private fun put(zip: ZipOutputStream, name: String, text: String) {
         zip.putNextEntry(ZipEntry(name))
