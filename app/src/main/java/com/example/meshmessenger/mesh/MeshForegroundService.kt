@@ -30,8 +30,6 @@ class MeshForegroundService : Service() {
         const val ACTION_APP_START = "com.example.meshmessenger.APP_START"
         const val ACTION_START = "com.example.meshmessenger.START_MESH"
         const val ACTION_STOP = "com.example.meshmessenger.STOP_MESH"
-        const val ACTION_SET_MODE = "com.example.meshmessenger.SET_TRANSPORT_MODE"
-        const val EXTRA_TRANSPORT_MODE = "transport_mode"
 	const val ACTION_SEND_MESH = "com.example.meshmessenger.SEND_MESH"
         const val EXTRA_PACKET = "packet"
         const val ACTION_PROFILE_NAME_CHANGED = "com.example.meshmessenger.PROFILE_NAME_CHANGED"
@@ -49,7 +47,6 @@ class MeshForegroundService : Service() {
         const val EXTRA_MESH_ACTIVE = "mesh_active"
         const val EXTRA_PACKET_ID = "packet_id"
         const val ACTION_PEER_STATUS = "com.example.meshmessenger.PEER_STATUS"
-        const val EXTRA_BT_COUNT = "bt_count"
         const val EXTRA_RELAY_COUNT = "relay_count"
         const val ACTION_MESH_DELIVERED = "com.example.meshmessenger.MESH_DELIVERED"
         const val EXTRA_DELIVERED_PACKET_ID = "delivered_packet_id"
@@ -459,7 +456,6 @@ class MeshForegroundService : Service() {
         }
         sendBroadcast(Intent(ACTION_PEER_STATUS).apply {
             setPackage(packageName)
-            putExtra(EXTRA_BT_COUNT, 0)
             putExtra(EXTRA_RELAY_COUNT, relayPeerCount)
         })
     }
