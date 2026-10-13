@@ -1,8 +1,6 @@
 package com.example.meshmessenger
 
 import android.Manifest
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -38,7 +36,6 @@ import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     private var sendEnabled = true
-    private var adapter: BluetoothAdapter? = null
     private lateinit var status: TextView
     private lateinit var log: TextView
     private lateinit var identity: IdentityStore
@@ -60,7 +57,6 @@ class MainActivity : ComponentActivity() {
     private var selected: ContactStore.Contact? = null
     private var pendingQrField: EditText? = null
     private var meshActive = false
-    private var transportMode = "BOTH"
     private var meshActionPending = false
     private var pendingMeshTargetActive = false
     private lateinit var meshButton: Button
@@ -124,16 +120,6 @@ class MainActivity : ComponentActivity() {
         log.text = "QR-код считан. Проверь данные и нажми «Добавить»."
     }
 
-    private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-        if (result.values.all { it }) {
-            startRuntimeNotification()
-            startMeshIfAllowed()
-        } else {
-            status.text = "Не все разрешения предоставлены"
-            log.text = "Для mesh нужны Bluetooth и, на Android 11 и ниже, доступ к геопозиции для BT-сканирования."
-        }
-    }
-
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) launchQrScanner()
         else log.text = "Камера не разрешена: сканирование QR-кода недоступно."
@@ -146,20 +132,18 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         try {
-        adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
         identity = IdentityStore(this)
         router = MeshRouter(identity.nodeId, identity.keyPair.private).also { it.identityPublicBytes = identity.keyPair.public.encoded }
         contacts = ContactStore(this)
         chats = ChatStore(this)
         pendingOutbox = PendingMessageStore(this)
-        transportMode = getSharedPreferences("mesh_runtime", MODE_PRIVATE).getString("transport_mode", "BOTH") ?: "BOTH"
         updater = UpdateManager(this)
         // log must exist before buildHome(): setting the network switch can invoke its listener.
         log = TextView(this)
+        meshButton = Button(this)
         buildHome()
         requestNotificationPermission()
-        requestBluetoothPermissionsIfNeeded()
-        if (hasBluetoothRuntimePermissions()) startRuntimeNotification()
+        startRuntimeNotification()
         // Старт не ждёт сеть: первая автопроверка через час, затем раз в час.
         updateHandler.postDelayed(hourlyUpdateCheck, 60L * 60L * 1000L)
     }
@@ -584,66 +568,6 @@ class MainActivity : ComponentActivity() {
         }
         root.addView(peerStatus)
 
-        root.addView(homeText("РЕЖИМ ПЕРЕДАЧИ", 13f).apply {
-            setPadding(dp(2), dp(4), dp(2), dp(2))
-        })
-        val modeRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.CENTER
-            background = android.graphics.drawable.GradientDrawable().apply {
-                cornerRadius = dp(12).toFloat()
-                setColor(0xFF081824.toInt())
-                setStroke(dp(1), 0xFF087E99.toInt())
-            }
-            setPadding(dp(4), dp(4), dp(4), dp(4))
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52)).apply {
-                setMargins(0, dp(2), 0, dp(8))
-            }
-        }
-        val modeButtons = linkedMapOf<String, Button>()
-        fun renderModeButtons() {
-            modeButtons.forEach { (mode, button) ->
-                val active = transportMode == mode
-                button.background = android.graphics.drawable.GradientDrawable().apply {
-                    cornerRadius = dp(9).toFloat()
-                    setColor(if (active) 0xFF087E99.toInt() else 0x00000000)
-                }
-                button.setTextColor(if (active) Color.WHITE else Color.rgb(105, 210, 255))
-            }
-        }
-        listOf("BT" to "BLE", "BOTH" to "BLE + RELAY", "RELAY" to "RELAY").forEach { (mode, label) ->
-            val button = Button(this).apply {
-                text = label
-                textSize = 11f
-                isAllCaps = false
-                minHeight = dp(42)
-                minWidth = 0
-                setPadding(dp(3), 0, dp(3), 0)
-                layoutParams = LinearLayout.LayoutParams(0, dp(42), 1f).apply {
-                    setMargins(dp(2), 0, dp(2), 0)
-                }
-                setOnClickListener {
-                    if (transportMode == mode) return@setOnClickListener
-                    transportMode = mode
-                    getSharedPreferences("mesh_runtime", MODE_PRIVATE).edit().putString("transport_mode", mode).apply()
-                    renderModeButtons()
-                    if (mode != "RELAY" && !hasBluetoothRuntimePermissions()) {
-                        requestMeshPermissions()
-                    } else {
-                        startService(Intent(this@MainActivity, MeshForegroundService::class.java).apply {
-                            action = MeshForegroundService.ACTION_SET_MODE
-                            putExtra(MeshForegroundService.EXTRA_TRANSPORT_MODE, mode)
-                        })
-                    }
-                    log.text = "Режим передачи: $label"
-                }
-            }
-            modeButtons[mode] = button
-            modeRow.addView(button)
-        }
-        renderModeButtons()
-        root.addView(modeRow)
-
         meshButton = actionButton(
             if (meshActive) "ОСТАНОВИТЬ MESH" else "ЗАПУСТИТЬ MESH",
             R.drawable.ic_stop
@@ -653,7 +577,7 @@ class MainActivity : ComponentActivity() {
                 beginMeshAction(false)
                 startService(Intent(this@MainActivity, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_STOP))
             } else {
-                requestMeshPermissions()
+                startService(Intent(this@MainActivity, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_START))
             }
         }
         root.addView(meshButton)
@@ -699,7 +623,7 @@ class MainActivity : ComponentActivity() {
             setPadding(0, 0, 0, dp(18))
         })
         root.addView(TextView(this).apply {
-            text = "Приложение соберёт версию, сведения об устройстве, состояние Bluetooth и журнал диагностики. Личные сообщения и ключи в отчёт добавлять не нужно."
+            text = "Приложение соберёт версию, сведения об устройстве, состояние интернет-соединения и журнал диагностики. Личные сообщения и ключи в отчёт добавлять не нужно."
             textSize = 15f
             setTextColor(Color.rgb(211, 229, 255))
             setPadding(0, 0, 0, dp(18))
@@ -722,8 +646,7 @@ class MainActivity : ComponentActivity() {
             Thread {
                 val outcome = runCatching {
                     val diagnostics = MeshDiagnostics(this)
-                    val monitor = MeshBluetoothMonitor(this, adapter, diagnostics)
-                    MeshBugReport.create(this, diagnostics, monitor.snapshot())
+                    MeshBugReport.create(this, diagnostics)
                 }
                 runOnUiThread {
                     outcome.onSuccess { report ->
@@ -843,120 +766,6 @@ class MainActivity : ComponentActivity() {
         ) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-    }
-
-    private fun hasBluetoothRuntimePermissions(): Boolean {
-        return if (android.os.Build.VERSION.SDK_INT >= 31) {
-            listOf(
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT
-            ).all {
-                androidx.core.content.ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
-            }
-        } else if (android.os.Build.VERSION.SDK_INT >= 23) {
-            androidx.core.content.ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        } else {
-            true
-        }
-    }
-
-    private fun requestBluetoothPermissionsIfNeeded() {
-        if (android.os.Build.VERSION.SDK_INT >= 31) {
-            val required = arrayOf(
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT
-            )
-            val missing = required.filter {
-                androidx.core.content.ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-            }
-            if (missing.isNotEmpty()) permissions.launch(missing.toTypedArray())
-        } else if (android.os.Build.VERSION.SDK_INT >= 23 &&
-            androidx.core.content.ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
-        ) {
-            permissions.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION))
-        }
-    }
-
-    private fun requestMeshPermissions() {
-        val missing = when {
-            android.os.Build.VERSION.SDK_INT >= 31 -> listOf(
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT
-            ).filter {
-                androidx.core.content.ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-            }
-            android.os.Build.VERSION.SDK_INT >= 23 -> listOf(Manifest.permission.ACCESS_FINE_LOCATION).filter {
-                androidx.core.content.ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-            }
-            else -> emptyList()
-        }
-        if (missing.isEmpty()) {
-            startMeshIfAllowed()
-        } else {
-            permissions.launch(missing.toTypedArray())
-        }
-    }
-
-    private fun startMeshIfAllowed() {
-        val bluetoothAdapter = adapter ?: run { status.text = "Bluetooth недоступен"; log.text = "На этом устройстве не найден Bluetooth-адаптер."; return }
-        if (!bluetoothAdapter.isEnabled) { status.text = "Включи Bluetooth"; return }
-        if (android.os.Build.VERSION.SDK_INT in 28..30 &&
-            !(getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager).isLocationEnabled
-        ) {
-            status.text = "Включи геолокацию для BT"
-            log.text = "На Android 9–11 система не выполняет BT-сканирование при выключенной геолокации."
-            return
-        }
-        if (android.os.Build.VERSION.SDK_INT in 23..27 &&
-            android.provider.Settings.Secure.getInt(
-                contentResolver,
-                android.provider.Settings.Secure.LOCATION_MODE,
-                android.provider.Settings.Secure.LOCATION_MODE_OFF
-            ) == android.provider.Settings.Secure.LOCATION_MODE_OFF
-        ) {
-            status.text = "Включи геолокацию для BT"
-            log.text = "На Android 6–8 система не выполняет BT-сканирование при выключенной геолокации."
-            return
-        }
-        beginMeshAction(true)
-        startService(Intent(this, MeshForegroundService::class.java).setAction(MeshForegroundService.ACTION_START))
-        status.text = "Mesh запускается..."
-    }
-    private fun handleIncoming(text: String, sourceId: String, packetId: String = "") {
-        chats.addIncomingIfAbsent(sourceId, text, packetId)
-        // The service persists incoming messages before broadcasting them. Refresh the
-        // current conversation immediately; otherwise the saved message may remain
-        // invisible until the user closes and reopens the chat.
-        if (selected?.nodeId == sourceId) refreshOpenChat?.invoke()
-        val contact = contacts.all().firstOrNull { it.nodeId == sourceId }
-        log.text = if (contact != null) {
-            "Получено от ${contact.name}: $text"
-        } else {
-            "Получено от ${sourceId.take(12)}: $text"
-        }
-    }
-
-    private fun addContactDialog() {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 4, 24, 4)
-        }
-        val name = EditText(this).apply { hint = "Имя контакта (необязательно)" }
-        val card = EditText(this).apply {
-            hint = "Вставь код контактной карточки"
-            minLines = 4
-            setTextIsSelectable(true)
-        }
-        pendingQrField = card
-        val scan = Button(this).apply {
-            text = "▣ СКАНИРОВАТЬ QR КАМЕРОЙ"
-            setOnClickListener {
-                if (androidx.core.content.ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchQrScanner()
-                else cameraPermission.launch(Manifest.permission.CAMERA)
-            }
-        }
-        box.addView(name); box.addView(card); box.addView(scan)
-        AlertDialogBuilder(box, "Добавить контакт") { }
     }
 
     private fun launchQrScanner() {
@@ -1453,18 +1262,9 @@ class MainActivity : ComponentActivity() {
     private val peerStatusReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != MeshForegroundService.ACTION_PEER_STATUS) return
-            val bt = intent.getIntExtra(MeshForegroundService.EXTRA_BT_COUNT, 0)
             val relayPeers = intent.getIntExtra(MeshForegroundService.EXTRA_RELAY_COUNT, 0)
-            val bluetoothIcon = if (bt > 0) R.drawable.ic_bluetooth_mesh else 0
-            val relayIcon = if (relayPeers > 0) R.drawable.ic_relay_radio else 0
-            // These counters represent connected peers, not whether a transport is available.
-            peerStatus.text = when {
-                bt > 0 && relayPeers > 0 -> "УЗЛЫ: BT $bt • RELAY $relayPeers"
-                bt > 0 -> "УЗЛЫ BT: $bt • RELAY: 0"
-                relayPeers > 0 -> "УЗЛЫ BT: 0 • RELAY: $relayPeers"
-                else -> "НЕТ СОЕДИНЁННЫХ УЗЛОВ"
-            }
-            peerStatus.setCompoundDrawablesWithIntrinsicBounds(bluetoothIcon, 0, relayIcon, 0)
+            peerStatus.text = if (relayPeers > 0) "СОБЕСЕДНИКИ В СЕТИ: $relayPeers" else "ОЖИДАНИЕ ПОДКЛЮЧЕНИЯ К ИНТЕРНЕТУ"
+            peerStatus.setCompoundDrawablesWithIntrinsicBounds(if (relayPeers > 0) R.drawable.ic_relay_radio else 0, 0, 0, 0)
         }
     }
 
@@ -1472,7 +1272,7 @@ class MainActivity : ComponentActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != MeshForegroundService.ACTION_MESH_DELIVERED) return
             val packetId = intent.getStringExtra(MeshForegroundService.EXTRA_DELIVERED_PACKET_ID) ?: return
-            android.util.Log.i("MeshBluetoothDiag", "ui_delivery_status packetId=$packetId")
+            android.util.Log.i("MeshMessenger", "ui_delivery_status packetId=$packetId")
             chats.updateDelivery(packetId, ChatStore.Delivery.DELIVERED)
             refreshOpenChat?.invoke()
             log.text = "➤ Доставлено: получатель подтвердил сообщение"
