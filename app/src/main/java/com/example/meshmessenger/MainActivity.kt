@@ -107,6 +107,7 @@ class MainActivity : ComponentActivity() {
                 refreshOpenChat?.invoke()
             }
             log.text = "Контакт обновлён: $name"
+            refreshHome?.invoke()
         }
     }
     private val contactStatusRunnable = object : Runnable {
@@ -251,7 +252,273 @@ class MainActivity : ComponentActivity() {
             ).apply { setMargins(0, dp(7), 0, dp(7)) }
         }
 
+    private var refreshHome: (() -> Unit)? = null
+
     private fun buildHome() {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(18), dp(20), dp(14))
+            setBackgroundColor(Color.rgb(5, 7, 11))
+        }
+
+        status = TextView(this).apply {
+            text = if (meshActive) "Подключено" else "Готов к работе"
+            textSize = 12f
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            setTextColor(if (meshActive) Color.rgb(0, 220, 170) else Color.rgb(145, 164, 178))
+            setPadding(0, 0, 0, dp(3))
+        }
+        peerStatus = TextView(this).apply {
+            text = "Сообщения и контакты"
+            textSize = 13f
+            setTextColor(Color.rgb(130, 150, 164))
+            setPadding(0, 0, 0, dp(12))
+        }
+        updateStatus = TextView(this).apply {
+            text = ""
+            textSize = 12f
+            setTextColor(Color.rgb(130, 150, 164))
+        }
+
+        val titleRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+        }
+        val titleBlock = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+        }
+        titleBlock.addView(TextView(this).apply {
+            text = "Сообщения"
+            textSize = 30f
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            setTextColor(Color.rgb(238, 246, 250))
+        })
+        titleBlock.addView(status)
+        titleRow.addView(titleBlock)
+        titleRow.addView(messengerIconButton("＋", "Добавить контакт") { addContactDialog() })
+        titleRow.addView(messengerIconButton("⋮", "Настройки") { buildLegacyHome() })
+        root.addView(titleRow)
+        root.addView(peerStatus)
+
+        val search = EditText(this).apply {
+            hint = "Поиск по контактам"
+            setSingleLine(true)
+            textSize = 15f
+            setTextColor(Color.rgb(235, 244, 248))
+            setHintTextColor(Color.rgb(102, 121, 134))
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(14).toFloat()
+                setColor(Color.rgb(15, 20, 27))
+                setStroke(dp(1), Color.rgb(32, 48, 59))
+            }
+            layoutParams = LinearLayout.LayoutParams(-1, dp(50)).apply {
+                bottomMargin = dp(14)
+            }
+        }
+        root.addView(search)
+
+        val listScroll = ScrollView(this).apply {
+            isFillViewport = false
+            clipToPadding = false
+            setBackgroundColor(Color.TRANSPARENT)
+            layoutParams = LinearLayout.LayoutParams(-1, 0, 1f)
+        }
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(2), 0, dp(8))
+        }
+        listScroll.addView(list)
+        root.addView(listScroll)
+
+        fun renderContacts(query: String = "") {
+            list.removeAllViews()
+            val filtered = contacts.all()
+                .filter { it.name.contains(query, ignoreCase = true) || it.nodeId.contains(query, ignoreCase = true) }
+                .sortedWith(compareByDescending<ContactStore.Contact> { chats.messages(it.nodeId).maxOfOrNull { m -> m.time } ?: 0L }.thenBy { it.name.lowercase() })
+
+            if (filtered.isEmpty()) {
+                val empty = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = android.view.Gravity.CENTER
+                    setPadding(dp(18), dp(42), dp(18), dp(42))
+                }
+                empty.addView(TextView(this).apply {
+                    text = if (query.isBlank() && contacts.all().isEmpty()) "Пока нет чатов" else "Ничего не найдено"
+                    textSize = 20f
+                    typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+                    gravity = android.view.Gravity.CENTER
+                    setTextColor(Color.rgb(229, 239, 245))
+                })
+                empty.addView(TextView(this).apply {
+                    text = if (query.isBlank() && contacts.all().isEmpty()) "Добавь контакт, чтобы начать переписку." else "Попробуй другое имя или Node ID."
+                    textSize = 14f
+                    gravity = android.view.Gravity.CENTER
+                    setTextColor(Color.rgb(130, 150, 164))
+                    setPadding(0, dp(8), 0, dp(16))
+                })
+                if (query.isBlank() && contacts.all().isEmpty()) {
+                    empty.addView(messengerActionButton("Добавить контакт") { addContactDialog() })
+                    empty.addView(messengerActionButton("Показать мой QR-код") { showOwnQr() })
+                }
+                list.addView(empty)
+                return
+            }
+
+            filtered.forEach { contact ->
+                val latest = chats.messages(contact.nodeId).maxByOrNull { it.time }
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = android.view.Gravity.CENTER_VERTICAL
+                    setPadding(dp(12), dp(12), dp(12), dp(12))
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = dp(16).toFloat()
+                        setColor(Color.rgb(12, 17, 23))
+                        setStroke(dp(1), Color.rgb(27, 40, 49))
+                    }
+                    layoutParams = LinearLayout.LayoutParams(-1, -2).apply {
+                        bottomMargin = dp(9)
+                    }
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener { openChat(contact) }
+                }
+                val avatar = TextView(this).apply {
+                    text = contact.name.trim().firstOrNull()?.uppercase() ?: "?"
+                    textSize = 22f
+                    typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+                    gravity = android.view.Gravity.CENTER
+                    setTextColor(Color.rgb(0, 221, 245))
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        shape = android.graphics.drawable.GradientDrawable.OVAL
+                        setColor(Color.rgb(10, 34, 43))
+                        setStroke(dp(1), Color.rgb(24, 100, 118))
+                    }
+                    layoutParams = LinearLayout.LayoutParams(dp(52), dp(52)).apply {
+                        rightMargin = dp(12)
+                    }
+                }
+                row.addView(avatar)
+                val details = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+                }
+                details.addView(TextView(this).apply {
+                    text = contact.name
+                    textSize = 16f
+                    typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+                    setTextColor(Color.rgb(238, 246, 250))
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+                val preview = when {
+                    latest == null -> "Начни переписку"
+                    latest.mine -> "Вы: ${latest.text}"
+                    else -> latest.text
+                }
+                details.addView(TextView(this).apply {
+                    text = preview
+                    textSize = 13f
+                    setTextColor(Color.rgb(139, 157, 169))
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    setPadding(0, dp(4), 0, 0)
+                })
+                row.addView(details)
+                val trailing = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = android.view.Gravity.END
+                }
+                trailing.addView(TextView(this).apply {
+                    text = latest?.let { android.text.format.DateFormat.getTimeFormat(this@MainActivity).format(java.util.Date(it.time)) } ?: ""
+                    textSize = 11f
+                    setTextColor(Color.rgb(104, 126, 139))
+                })
+                trailing.addView(TextView(this).apply {
+                    text = when (latest?.delivery) {
+                        ChatStore.Delivery.DELIVERED -> if (latest.mine) "✓✓" else ""
+                        ChatStore.Delivery.WAITING -> "◷"
+                        ChatStore.Delivery.NOT_SENT -> "!"
+                        else -> if (latest?.mine == true) "✓" else ""
+                    }
+                    textSize = 12f
+                    setTextColor(if (latest?.delivery == ChatStore.Delivery.NOT_SENT) Color.rgb(255, 145, 110) else Color.rgb(0, 195, 220))
+                    setPadding(0, dp(6), 0, 0)
+                })
+                row.addView(trailing)
+                list.addView(row)
+            }
+        }
+
+        refreshHome = { renderContacts(search.text.toString()) }
+        search.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = renderContacts(s?.toString().orEmpty())
+            override fun afterTextChanged(s: android.text.Editable?) = Unit
+        })
+        renderContacts()
+
+        val bottom = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER
+            setPadding(0, dp(10), 0, 0)
+        }
+        bottom.addView(messengerBottomButton("Контакты") { contactsDialog() }, LinearLayout.LayoutParams(0, dp(48), 1f))
+        bottom.addView(messengerBottomButton("Мой QR") { showOwnQr() }, LinearLayout.LayoutParams(0, dp(48), 1f))
+        bottom.addView(messengerBottomButton("Настройки") { buildLegacyHome() }, LinearLayout.LayoutParams(0, dp(48), 1f))
+        root.addView(bottom)
+        root.addView(updateStatus)
+        setContentView(root)
+    }
+
+    private fun messengerIconButton(label: String, description: String, onClick: () -> Unit): TextView =
+        TextView(this).apply {
+            text = label
+            contentDescription = description
+            textSize = 25f
+            gravity = android.view.Gravity.CENTER
+            setTextColor(Color.rgb(0, 221, 245))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(14).toFloat()
+                setColor(Color.rgb(13, 24, 31))
+                setStroke(dp(1), Color.rgb(29, 65, 77))
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(46), dp(46)).apply {
+                leftMargin = dp(8)
+            }
+            setOnClickListener { onClick() }
+        }
+
+    private fun messengerActionButton(label: String, onClick: () -> Unit): Button =
+        Button(this).apply {
+            text = label
+            textSize = 14f
+            isAllCaps = false
+            setTextColor(Color.rgb(0, 221, 245))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(13).toFloat()
+                setColor(Color.rgb(13, 29, 37))
+                setStroke(dp(1), Color.rgb(26, 101, 120))
+            }
+            layoutParams = LinearLayout.LayoutParams(-1, dp(50)).apply {
+                topMargin = dp(5)
+                bottomMargin = dp(5)
+            }
+            setOnClickListener { onClick() }
+        }
+
+    private fun messengerBottomButton(label: String, onClick: () -> Unit): Button =
+        Button(this).apply {
+            text = label
+            textSize = 12f
+            isAllCaps = false
+            setTextColor(Color.rgb(161, 183, 194))
+            background = android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
+            setOnClickListener { onClick() }
+        }
+
+    private fun buildLegacyHome() {
         val scroll = ScrollView(this).apply {
             isFillViewport = true
             setBackgroundColor(Color.TRANSPARENT)
@@ -412,6 +679,7 @@ class MainActivity : ComponentActivity() {
         setContentView(rootBackground)
         status.text = if (meshActive) "MESH АКТИВЕН" else "MESH ВЫКЛЮЧЕН"
     }
+
 
 
     private fun showBugReportScreen() {
